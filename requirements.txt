@@ -1,0 +1,47 @@
+# =====================================================================
+# oa_pipeline — Python requirements
+# =====================================================================
+# Tested with the versions shown in the comments. Lower bounds are
+# minimums known to work; upper bounds are intentionally absent to
+# let pip pick the latest compatible build.
+#
+# Install with:
+#     pip install -r requirements.txt
+#
+# Or, if you use conda:
+#     conda install --file requirements.txt -c conda-forge
+
+# ---- Required (every notebook) -------------------------------------
+pandas >= 2.0            # nullable dtypes, pd.NA, period dtype
+                         # (tested: 3.0.2; 2.x series also works)
+numpy >= 1.24            # required by pandas; we use it indirectly
+                         # (tested: 2.4.4)
+openpyxl >= 3.0          # xlsx reading (notebooks 01 and 02)
+                         # (tested: 3.1.5)
+matplotlib >= 3.5        # QC plots (notebook 02 only)
+                         # (tested: 3.10.8)
+
+# ---- Required for the command-line runner --------------------------
+papermill >= 2.4         # run_pipeline.sh uses this to drive notebooks
+                         # (only needed if you use the runner script;
+                         #  not imported by any notebook itself)
+
+# ---- Optional but recommended --------------------------------------
+pyarrow >= 10.0          # Parquet writes. If missing, every stage
+                         # still writes CSV; the manifest logs the
+                         # absence under `parquet_written: False`.
+                         # Alternative: install fastparquet instead.
+pyyaml >= 6.0            # YAML config files. If missing, JSON configs
+                         # still work; a YAML CONFIG_PATH then dies
+                         # with a clear error message.
+                         # (tested: 6.0.3)
+tabulate >= 0.9          # Prettier markdown tables in the per-stage
+                         # report.md files. Without it, reports fall
+                         # back to fenced code blocks (still readable,
+                         # just monospaced).
+                         # (tested: 0.10.0)
+
+# ---- Optional: only needed if you edit notebooks interactively -----
+# jupyter                # Jupyter Lab / Notebook UI
+# ipykernel              # for Kernel -> Restart & Run All
+# ipython                # for display() in notebook cells

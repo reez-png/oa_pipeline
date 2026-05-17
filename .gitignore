@@ -1,0 +1,35 @@
+# Pipeline outputs (reproducible from input + code + config)
+outputs/
+runs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+env/
+.python-version
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data — be deliberate about what you check in. If your INPUT_XLSX
+# lives in this repo, comment out the next line; otherwise keep it.
+data/
+
+# Local pipeline scratch
+*.log
+.tmp/
