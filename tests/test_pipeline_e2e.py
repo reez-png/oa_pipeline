@@ -20,6 +20,7 @@ on the runner script.
 
 from __future__ import annotations
 
+import os
 import json
 import shutil
 import subprocess
@@ -35,24 +36,72 @@ papermill = pytest.importorskip("papermill")
 
 
 @pytest.fixture(scope="module")
-def pipeline_outputs(project_root: Path, example_xlsx_path: Path, tmp_path_factory):
+def pipeline_outputs(project_root: Path, example_xlsx_path: Path):
     """Run the pipeline once for the module; tests share the output.
 
-    Uses a per-test-run tmp dir for OUT_DIR so we never collide with a
-    real run under ``outputs/``.
+    Paths are passed to bash as project-relative paths so Windows, Git Bash,
+    and WSL do not mangle C:/ style paths.
     """
-    out_root = tmp_path_factory.mktemp("pipeline_e2e")
     runner = project_root / "run_pipeline.sh"
     if not runner.exists():
         pytest.skip(f"runner not found: {runner}")
 
+    if not example_xlsx_path.exists():
+        pytest.skip(
+            f"{example_xlsx_path} not present. Run "
+            "`python examples/make_example_data.py` to regenerate it."
+        )
+
+    out_root = project_root / ".pytest_runs" / "pipeline_e2e"
+    if out_root.exists():
+        shutil.rmtree(out_root)
+    out_root.mkdir(parents=True, exist_ok=True)
+
+    input_arg = example_xlsx_path.relative_to(project_root).as_posix()
+    output_arg = out_root.relative_to(project_root).as_posix()
+
+    def _find_git_bash() -> str | None:
+        """Prefer Git Bash over WSL bash on Windows."""
+        candidates = [
+            Path(os.environ.get("ProgramFiles", "")) / "Git" / "bin" / "bash.exe",
+            Path(os.environ.get("ProgramFiles", "")) / "Git" / "usr" / "bin" / "bash.exe",
+            Path(os.environ.get("ProgramFiles(x86)", "")) / "Git" / "bin" / "bash.exe",
+            Path(os.environ.get("ProgramFiles(x86)", "")) / "Git" / "usr" / "bin" / "bash.exe",
+        ]
+
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate)
+
+        return shutil.which("bash")
+
+    bash_exe = _find_git_bash()
+    if bash_exe is None:
+        pytest.skip("bash not found on PATH")
+
+    env = os.environ.copy()
+
+    venv_scripts = project_root / ".venv" / "Scripts"
+    if venv_scripts.exists():
+        env["PATH"] = str(venv_scripts) + os.pathsep + env.get("PATH", "")
+        env["VIRTUAL_ENV"] = str(project_root / ".venv")
+
+    env["PYTHONPATH"] = str(project_root) + os.pathsep + env.get("PYTHONPATH", "")
+
     result = subprocess.run(
-        ["bash", str(runner), str(example_xlsx_path), str(out_root)],
+        [
+            bash_exe,
+            "./run_pipeline.sh",
+            input_arg,
+            output_arg,
+        ],
         cwd=project_root,
-        capture_output=True, text=True,
+        env=env,
+        capture_output=True,
+        text=True,
     )
+
     if result.returncode != 0:
-        # Capture both stdout and stderr so a CI failure has actionable info.
         pytest.fail(
             f"run_pipeline.sh exited with code {result.returncode}\n"
             f"--- stdout (last 1500 chars) ---\n{result.stdout[-1500:]}\n"

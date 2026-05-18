@@ -33,3 +33,5 @@ data/
 # Local pipeline scratch
 *.log
 .tmp/
+
+.pytest_runs/
