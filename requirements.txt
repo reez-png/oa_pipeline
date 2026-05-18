@@ -48,5 +48,5 @@ pytest >= 8.0            # test runner for validating pipeline modules
 
 # ---- Optional: only needed if you edit notebooks interactively -----
 # jupyter                # Jupyter Lab / Notebook UI
-# ipykernel              # for Kernel -> Restart & Run All
-# ipython                # for display() in notebook cells
+ipykernel >= 6.0         # allows this .venv to appear as a Jupyter kernel
+ipython >= 8.0           # supports display() and notebook friendly output
