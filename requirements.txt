@@ -41,6 +41,11 @@ tabulate >= 0.9          # Prettier markdown tables in the per-stage
                          # just monospaced).
                          # (tested: 0.10.0)
 
+# ---- Development and testing ---------------------------------------
+pytest >= 8.0            # test runner for validating pipeline modules
+                         # and checking that notebook helper functions
+                         # behave as expected.
+
 # ---- Optional: only needed if you edit notebooks interactively -----
 # jupyter                # Jupyter Lab / Notebook UI
 # ipykernel              # for Kernel -> Restart & Run All
