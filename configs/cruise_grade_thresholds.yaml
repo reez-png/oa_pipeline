@@ -1,0 +1,156 @@
+# =====================================================================
+# cruise_grade_thresholds.yaml
+# OA pipeline quality control thresholds
+# =====================================================================
+#
+# Purpose:
+# This file stores broad screening thresholds used to flag suspicious
+# carbonate chemistry, hydrographic, and station metadata values.
+#
+# Important:
+# These thresholds are not final scientific acceptance rules.
+# They are first pass screening limits. Any flagged value should be
+# reviewed with cruise notes, calibration records, CRM records, station
+# metadata, and regional oceanographic context.
+
+version: 0.1.0
+config_type: cruise_grade_thresholds
+
+metadata:
+  project: OA pipeline
+  region: Ghana shelf and Gulf of Guinea
+  created_by: Maurice Oti Edusei
+  notes: >
+    Starter thresholds for automated screening. Adjust after checking
+    real cruise data, instrument calibration records, certified reference
+    material performance, and regional hydrography.
+
+units:
+  temperature: degree_C
+  salinity: practical_salinity
+  pressure: dbar
+  depth: m
+  ta: umol_kg
+  dic: umol_kg
+  ph: total_scale
+  oxygen: umol_kg
+
+required_columns:
+  station_id: true
+  sample_id: true
+  latitude: true
+  longitude: true
+  date_time_utc: true
+  temperature_degC: true
+  salinity_psu: true
+  ta_umol_kg: false
+  dic_umol_kg: false
+  ph_total: false
+
+range_checks:
+  latitude:
+    min: -90
+    max: 90
+    severity: fail
+
+  longitude:
+    min: -180
+    max: 180
+    severity: fail
+
+  temperature_degC:
+    min: 0
+    max: 35
+    severity: review
+    notes: >
+      Broad sanity range for tropical coastal and shelf waters.
+      Tighten after reviewing Ghana shelf observations.
+
+  salinity_psu:
+    min: 0
+    max: 40
+    severity: review
+    notes: >
+      Allows freshwater influenced, estuarine, coastal, and shelf samples.
+
+  pressure_dbar:
+    min: 0
+    max: 6000
+    severity: review
+
+  depth_m:
+    min: 0
+    max: 6000
+    severity: review
+
+  ta_umol_kg:
+    min: 200
+    max: 3000
+    severity: review
+    notes: >
+      Broad screening range only. Estuarine and river influenced samples
+      can differ substantially from open ocean seawater.
+
+  dic_umol_kg:
+    min: 200
+    max: 3000
+    severity: review
+    notes: >
+      Broad screening range only. Review flagged values in the context
+      of salinity, temperature, biological activity, and river influence.
+
+  ph_total:
+    min: 6.5
+    max: 8.7
+    severity: review
+    notes: >
+      Assumes pH is reported on the total scale. Do not mix pH scales.
+
+  phosphate_umol_kg:
+    min: 0
+    max: 10
+    severity: review
+
+  silicate_umol_kg:
+    min: 0
+    max: 200
+    severity: review
+
+  nitrate_umol_kg:
+    min: 0
+    max: 100
+    severity: review
+
+missing_value_policy:
+  required_column_missing: fail
+  required_value_missing: fail
+  optional_value_missing: review
+
+duplicate_policy:
+  duplicate_sample_id: fail
+  duplicate_station_time_depth: review
+
+qc_flags:
+  pass:
+    code: pass
+    meaning: Value passed automated checks.
+
+  review:
+    code: review
+    meaning: Value may be valid but requires human review.
+
+  fail:
+    code: fail
+    meaning: Value is invalid or insufficient for downstream processing.
+
+carbonate_pair_policy:
+  accepted_input_pairs:
+    - ph_total_dic
+    - ph_total_ta
+    - ta_dic
+
+  preferred_input_pair: ph_total_dic
+
+  notes: >
+    Preferred pair may vary by sample type and data quality.
+    Record the exact carbonate input pair used for every calculated output.

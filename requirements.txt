@@ -1,52 +1,65 @@
 # =====================================================================
-# oa_pipeline — Python requirements
+# oa_pipeline requirements
 # =====================================================================
-# Tested with the versions shown in the comments. Lower bounds are
-# minimums known to work; upper bounds are intentionally absent to
-# let pip pick the latest compatible build.
+# Purpose
+# This file is for pip based installation during active development.
 #
 # Install with:
-#     pip install -r requirements.txt
+#     python -m pip install -r requirements.txt
 #
-# Or, if you use conda:
-#     conda install --file requirements.txt -c conda-forge
+# For conda or mamba:
+#     Prefer an environment.yml file instead of installing directly
+#     from this pip requirements file.
+#
+# For final reproducibility after a successful scientific run:
+#     python -m pip freeze > requirements-lock.txt
+#
+# Archive requirements-lock.txt together with the run outputs.
 
-# ---- Required (every notebook) -------------------------------------
-pandas >= 2.0            # nullable dtypes, pd.NA, period dtype
-                         # (tested: 3.0.2; 2.x series also works)
-numpy >= 1.24            # required by pandas; we use it indirectly
-                         # (tested: 2.4.4)
-openpyxl >= 3.0          # xlsx reading (notebooks 01 and 02)
-                         # (tested: 3.1.5)
-matplotlib >= 3.5        # QC plots (notebook 02 only)
-                         # (tested: 3.10.8)
+# =====================================================================
+# Core dependencies used by the notebooks and pipeline modules
+# =====================================================================
 
-# ---- Required for the command-line runner --------------------------
-papermill >= 2.4         # run_pipeline.sh uses this to drive notebooks
-                         # (only needed if you use the runner script;
-                         #  not imported by any notebook itself)
+pandas>=2.2,<3.1
+numpy>=1.26,<2.5
+openpyxl>=3.1,<4.0
+matplotlib>=3.8,<4.0
 
-# ---- Optional but recommended --------------------------------------
-pyarrow >= 10.0          # Parquet writes. If missing, every stage
-                         # still writes CSV; the manifest logs the
-                         # absence under `parquet_written: False`.
-                         # Alternative: install fastparquet instead.
-pyyaml >= 6.0            # YAML config files. If missing, JSON configs
-                         # still work; a YAML CONFIG_PATH then dies
-                         # with a clear error message.
-                         # (tested: 6.0.3)
-tabulate >= 0.9          # Prettier markdown tables in the per-stage
-                         # report.md files. Without it, reports fall
-                         # back to fenced code blocks (still readable,
-                         # just monospaced).
-                         # (tested: 0.10.0)
+# =====================================================================
+# Notebook runner
+# =====================================================================
+# Required only when using run_pipeline.sh.
 
-# ---- Development and testing ---------------------------------------
-pytest >= 8.0            # test runner for validating pipeline modules
-                         # and checking that notebook helper functions
-                         # behave as expected.
+papermill>=2.4,<3.0
 
-# ---- Optional: only needed if you edit notebooks interactively -----
-# jupyter                # Jupyter Lab / Notebook UI
-ipykernel >= 6.0         # allows this .venv to appear as a Jupyter kernel
-ipython >= 8.0           # supports display() and notebook friendly output
+# =====================================================================
+# Optional but recommended dependencies
+# =====================================================================
+# pyarrow enables Parquet output.
+# If missing, the pipeline should still write CSV.
+
+pyarrow>=10.0,<20.0
+
+# pyyaml enables YAML configuration files.
+# JSON configuration files can still work without pyyaml.
+
+pyyaml>=6.0,<7.0
+
+# tabulate improves markdown tables in report.md files.
+# Without it, reports can fall back to simpler text output.
+
+tabulate>=0.9,<0.11
+
+# =====================================================================
+# Testing
+# =====================================================================
+
+pytest>=8.0,<10.0
+
+# =====================================================================
+# Interactive notebook editing
+# =====================================================================
+# These are useful if you open or edit notebooks interactively.
+
+ipykernel>=6.0,<8.0
+ipython>=8.0,<10.0

@@ -1,37 +1,41 @@
 # =====================================================================
 # oa_pipeline -- pyproject.toml
 # =====================================================================
-# Packages the nine `oa_*.py` modules as a flat namespace of top-level
-# Python modules. The notebooks at the repository root keep working as
-# they always have (their `from oa_common import die` statements resolve
-# against the project's working directory). After `pip install -e .`,
-# those same imports also resolve outside the project directory -- the
-# pipeline becomes usable from any working directory or other project.
+# Packages the OA pipeline as a real Python package under:
 #
-# Why flat modules and not a `src/oa_pipeline/` package?
-# -----------------------------------------------------
-# The pipeline is research code, not a library API. Users mostly run
-# notebooks; the modules are imported, not browsed. A flat layout means:
-#   1. Notebooks `from oa_common import ...` works without installation.
-#   2. The recommended folder structure in the top-level README stays
-#      accurate (modules sit alongside notebooks).
-#   3. There is no `oa_pipeline.oa_common` vs `oa_common` ambiguity.
-# Setuptools fully supports this via `tool.setuptools.py-modules`.
+#     src/oa_pipeline/
+#
+# After installation with:
+#
+#     python -m pip install -e .
+#
+# modules can be imported from any working directory, for example:
+#
+#     from oa_pipeline.stage4 import add_readiness_status
+#
+# This project uses a src layout. Do not use flat py-modules with this
+# codebase because the package modules use relative imports such as:
+#
+#     from .common import ...
+# =====================================================================
 
 [build-system]
-requires = ["setuptools >= 64", "wheel"]
+requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
+
 [project]
-name = "oa_pipeline"
+name = "oa-pipeline"
 version = "0.1.0"
-description = "Eight-notebook preprocessing pipeline for ocean-acidification carbonate chemistry data"
+description = "Ocean acidification quality control and processing pipeline"
 readme = "README.md"
 license = { file = "LICENSE" }
+
 authors = [
     { name = "Prof. R. Mahu" },
     { name = "Maurice Oti Edusei" },
 ]
+
 keywords = [
     "ocean acidification",
     "carbonate chemistry",
@@ -41,6 +45,7 @@ keywords = [
     "FAIR data",
     "marine science",
 ]
+
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -53,83 +58,110 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Oceanography",
 ]
-requires-python = ">= 3.10"
+
+requires-python = ">=3.10"
+
 dependencies = [
-    "pandas >= 2.0",
-    "numpy >= 1.24",
-    "openpyxl >= 3.0",
-    "matplotlib >= 3.5",
+    "pandas>=2.2,<3.1",
+    "numpy>=1.26,<2.5",
+    "openpyxl>=3.1,<4.0",
+    "matplotlib>=3.8,<4.0",
 ]
+
 
 [project.optional-dependencies]
-# Parquet writes. If `parquet` is not installed every stage still writes
-# CSV; the manifest logs `parquet_written: False` and the absence is
-# recorded under `parquet_error`. Either `pyarrow` or `fastparquet` works.
-parquet = ["pyarrow >= 10.0"]
-
-# YAML config files. Without `pyyaml` the pipeline still accepts JSON
-# configs; a YAML CONFIG_PATH dies with a clear error message instead
-# of silently failing.
-yaml = ["pyyaml >= 6.0"]
-
-# Prettier markdown tables in per-stage `reports/report.md`. Without
-# `tabulate` the reports fall back to fenced code blocks (still
-# readable, just monospaced).
-tables = ["tabulate >= 0.9"]
-
-# The Papermill driver used by `run_pipeline.sh`. Not imported by any
-# notebook; only needed if you use the runner script.
-runner = ["papermill >= 2.4"]
-
-# The pytest test suite under `tests/`.
-test = ["pytest >= 7.0"]
-
-# Convenience: install everything.
-all = [
-    "pyarrow >= 10.0",
-    "pyyaml >= 6.0",
-    "tabulate >= 0.9",
-    "papermill >= 2.4",
-    "pytest >= 7.0",
+# Parquet output support.
+parquet = [
+    "pyarrow>=10.0,<20.0",
 ]
 
+# YAML configuration file support.
+yaml = [
+    "pyyaml>=6.0,<7.0",
+]
+
+# Better markdown tables in reports.
+tables = [
+    "tabulate>=0.9,<0.11",
+]
+
+# Notebook runner support for run_pipeline.sh.
+runner = [
+    "papermill>=2.4,<3.0",
+]
+
+# Test suite.
+test = [
+    "pytest>=8.0,<10.0",
+]
+
+# Interactive notebook editing.
+notebook = [
+    "ipykernel>=6.0,<8.0",
+    "ipython>=8.0,<10.0",
+]
+
+# Development convenience install.
+dev = [
+    "pyarrow>=10.0,<20.0",
+    "pyyaml>=6.0,<7.0",
+    "tabulate>=0.9,<0.11",
+    "papermill>=2.4,<3.0",
+    "pytest>=8.0,<10.0",
+    "ipykernel>=6.0,<8.0",
+    "ipython>=8.0,<10.0",
+]
+
+# Convenience: install all optional runtime, runner, test, and notebook tools.
+all = [
+    "pyarrow>=10.0,<20.0",
+    "pyyaml>=6.0,<7.0",
+    "tabulate>=0.9,<0.11",
+    "papermill>=2.4,<3.0",
+    "pytest>=8.0,<10.0",
+    "ipykernel>=6.0,<8.0",
+    "ipython>=8.0,<10.0",
+]
+
+
 [project.urls]
-# Update these once the repository is published.
 Homepage = "https://github.com/your-org/oa_pipeline"
 Documentation = "https://github.com/your-org/oa_pipeline#readme"
 Issues = "https://github.com/your-org/oa_pipeline/issues"
 
-# =====================================================================
-# Setuptools configuration
-# =====================================================================
-[tool.setuptools]
-# Flat-module layout. Each module is a top-level import target.
-py-modules = [
-    "oa_common",
-    "oa_inspect",
-    "oa_policy",
-    "oa_qc_ta_ph",
-    "oa_schema",
-    "oa_stage1b",
-    "oa_stage2",
-    "oa_stage3",
-    "oa_stage4",
-]
 
 # =====================================================================
-# Tool configuration
+# Setuptools configuration -- src/oa_pipeline package
 # =====================================================================
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["oa_pipeline*"]
+
+
+# =====================================================================
+# Pytest configuration
+# =====================================================================
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+
+# This lets pytest import oa_pipeline directly from src/ even before
+# editable install is fully recognised by the current shell/session.
+pythonpath = ["src"]
+
 addopts = [
-    "-ra",                  # short summary for all (a)ll except passed
-    "--strict-markers",     # unknown markers are errors, not warnings
+    "-ra",
+    "--strict-markers",
     "--strict-config",
 ]
+
 filterwarnings = [
-    # pandas often emits FutureWarnings for things we cannot avoid without
-    # making the code less readable. Keep them visible but do not fail.
     "default::FutureWarning",
     "default::DeprecationWarning",
 ]

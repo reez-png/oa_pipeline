@@ -1,37 +1,121 @@
-# Pipeline outputs (reproducible from input + code + config)
-outputs/
-runs/
+# =====================================================================
+# oa_pipeline .gitignore
+# =====================================================================
 
-# Python
+# ---------------------------------------------------------------------
+# Pipeline outputs
+# These are reproducible from input data, code, config, and environment.
+# ---------------------------------------------------------------------
+
+outputs/*
+!outputs/.gitkeep
+
+runs/*
+!runs/.gitkeep
+
+# ---------------------------------------------------------------------
+# Data
+# Keep the folder structure in Git, but ignore actual data files.
+# ---------------------------------------------------------------------
+
+data/*
+!data/README.md
+!data/raw/
+!data/interim/
+!data/processed/
+!data/external/
+
+data/raw/*
+!data/raw/.gitkeep
+
+data/interim/*
+!data/interim/.gitkeep
+
+data/processed/*
+!data/processed/.gitkeep
+
+data/external/*
+!data/external/.gitkeep
+
+# ---------------------------------------------------------------------
+# Python caches and environments
+# ---------------------------------------------------------------------
+
 __pycache__/
 *.py[cod]
 *.so
+*.pyd
+
 .venv/
 venv/
 env/
+ENV/
+
 .python-version
 *.egg-info/
+.eggs/
 
+# ---------------------------------------------------------------------
+# Build artifacts
+# ---------------------------------------------------------------------
+
+build/
+dist/
+pip-wheel-metadata/
+
+# ---------------------------------------------------------------------
+# Test and coverage artifacts
+# ---------------------------------------------------------------------
+
+.pytest_cache/
+.pytest_runs/
+.coverage
+htmlcov/
+
+# ---------------------------------------------------------------------
+# Type checking and linting caches
+# ---------------------------------------------------------------------
+
+.mypy_cache/
+.ruff_cache/
+
+# ---------------------------------------------------------------------
 # Jupyter
+# ---------------------------------------------------------------------
+
 .ipynb_checkpoints/
 *.nbconvert.ipynb
 
-# Editors / IDEs
+# ---------------------------------------------------------------------
+# Editors and IDEs
+# ---------------------------------------------------------------------
+
 .vscode/
 .idea/
 *.swp
 *~
 
-# OS
+# ---------------------------------------------------------------------
+# OS generated files
+# ---------------------------------------------------------------------
+
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Data — be deliberate about what you check in. If your INPUT_XLSX
-# lives in this repo, comment out the next line; otherwise keep it.
-data/
+# ---------------------------------------------------------------------
+# Local environment and secret files
+# ---------------------------------------------------------------------
 
-# Local pipeline scratch
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------------
+# Local scratch files
+# ---------------------------------------------------------------------
+
 *.log
 .tmp/
-
-.pytest_runs/
+tmp/
+temp/

@@ -1,0 +1,104 @@
+# =====================================================================
+# regional.yaml
+# Regional settings for the OA pipeline
+# =====================================================================
+#
+# Purpose:
+# This file stores location, regional domain, and carbonate chemistry
+# assumptions that should not be hardcoded inside notebooks.
+
+version: 0.1.0
+config_type: regional
+
+metadata:
+  project: OA pipeline
+  region_name: Ghana shelf and Gulf of Guinea
+  created_by: Maurice Oti Edusei
+  notes: >
+    Starter regional settings. Review and refine after checking actual
+    cruise station coordinates, sampling depths, season, and instrument
+    metadata.
+
+spatial_domain:
+  latitude_min: 3.0
+  latitude_max: 7.0
+  longitude_min: -4.0
+  longitude_max: 2.0
+  coordinate_reference_system: EPSG:4326
+
+regional_context:
+  country: Ghana
+  ocean_basin: Gulf of Guinea
+  setting: tropical_coastal_shelf
+  expected_influences:
+    - coastal_upwelling
+    - river_discharge
+    - estuarine_mixing
+    - biological_productivity
+    - shelf_exchange
+
+hydrographic_context:
+  salinity_regimes:
+    freshwater:
+      min: 0
+      max: 0.5
+    estuarine_low_salinity:
+      min: 0.5
+      max: 18
+    estuarine_high_salinity:
+      min: 18
+      max: 30
+    coastal_marine:
+      min: 30
+      max: 36
+    high_salinity_marine:
+      min: 36
+      max: 40
+
+  default_temperature_unit: degree_C
+  default_salinity_unit: practical_salinity
+  default_pressure_unit: dbar
+
+carbonate_system:
+  ph_scale: total
+  ta_unit: umol_kg
+  dic_unit: umol_kg
+  nutrient_unit: umol_kg
+
+  default_input_pair: ph_total_dic
+
+  constants_policy:
+    carbonic_acid_constants: document_in_stage_report
+    bisulfate_constant: document_in_stage_report
+    boron_total: document_in_stage_report
+    notes: >
+      The exact carbonate constants used by any CO2SYS or PyCO2SYS step
+      must be written to the stage report and manifest. Do not leave
+      constants implicit.
+
+  pressure_policy:
+    sample_pressure_source: pressure_dbar
+    allow_depth_to_pressure_conversion: true
+    notes: >
+      If pressure is estimated from depth, the conversion method should
+      be documented in the stage report.
+
+  pH_policy:
+    accepted_scales:
+      - total
+    reject_unknown_scale: true
+    notes: >
+      pH values from different scales should not be mixed. Convert only
+      when the original scale and conversion method are known.
+
+output_policy:
+  write_csv: true
+  write_parquet_if_available: true
+  write_manifest: true
+  write_stage_report: true
+
+provenance_policy:
+  record_input_file_hash: true
+  record_config_file_hash: true
+  record_software_versions: true
+  record_run_timestamp_utc: true
