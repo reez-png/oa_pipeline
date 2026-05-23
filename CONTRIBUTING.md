@@ -1,136 +1,344 @@
 # Contributing to oa_pipeline
 
-Thanks for your interest in contributing. This pipeline is research
-software — the code is small enough that any contributor can read it
-end-to-end in an afternoon. Most of what follows is about *where to
-look*, not about ceremony.
+Thank you for your interest in contributing to `oa_pipeline`.
+
+This project is research software for ocean acidification and carbonate chemistry data processing. The codebase is intentionally small, modular, and audit friendly. Most contributors should be able to understand the full workflow by reading the top level `README.md`, the eight notebooks, and the package modules under `src/oa_pipeline/`.
+
+The most important rule is simple: changes should preserve scientific traceability. If a change affects thresholds, flags, provenance, row classification, or output handoffs, update the documentation and add or update tests.
+
+---
 
 ## Quick orientation
 
-- **Top-level [README.md](README.md)** — what the pipeline does, the
-  recommended folder layout, the eight-notebook chain at a glance, and
-  the **"I want to change X — which file do I edit?"** lookup table.
-  Start here.
-- **Per-stage `<NN>_<name>.README.md`** — design rationale, citations,
-  and "what changed vs. the original" tables for each notebook. Open
-  the README next to its notebook when you want to know *why* a stage
-  does what it does.
-- **`tests/`** — a small pytest suite covering the load-bearing
-  functions. Run with `pytest`.
+Start with these files and folders:
+
+| Location | Purpose |
+|---|---|
+| `README.md` | Main project overview, folder layout, pipeline flow, quick start, and common edit targets. |
+| `notebooks/` | The eight Papermill driven notebook stages. |
+| `src/oa_pipeline/` | Reusable package code imported by notebooks and tests. |
+| `tests/` | Unit tests and the Papermill end to end test. |
+| `examples/make_example_data.py` | Deterministic synthetic example workbook generator. |
+| `examples/example_data.xlsx` | Bundled synthetic workbook used by the quickstart and E2E test. |
+| `run_pipeline.sh` | Command line runner that executes the notebook chain. |
+| `configs/` | Optional YAML, YML, or JSON configuration overrides. |
+| `outputs/` | Reproducible per stage outputs. This folder should not be committed. |
+| `runs/` | Papermill executed notebook copies. This folder should not be committed. |
+
+---
 
 ## Setup for development
+
+### Git Bash, macOS, or Linux
 
 ```bash
 git clone <wherever this lives>
 cd oa_pipeline
 
-# Editable install with all optional deps + pytest
 python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
+source .venv/bin/activate
 
-# Run the tests
-pytest
+python -m pip install --upgrade pip
+python -m pip install -e ".[all]"
 
-# Run the full pipeline end-to-end on the example dataset
-./run_pipeline.sh examples/example_dataset.xlsx outputs/
+python examples/make_example_data.py --out examples/example_data.xlsx
+
+python -m pytest -q
+python -m pytest tests/test_pipeline_e2e.py -q
+
+./run_pipeline.sh examples/example_data.xlsx outputs/test_run
 ```
 
-The `examples/example_dataset.xlsx` is a small synthetic workbook with
-samples, CRMs, and pH standards covering the chain — runnable in
-seconds.
+### Windows PowerShell
+
+```powershell
+git clone <wherever this lives>
+cd oa_pipeline
+
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+python -m pip install --upgrade pip
+python -m pip install -e ".[all]"
+
+python examples\make_example_data.py --out examples\example_data.xlsx
+
+python -m pytest -q
+python -m pytest tests\test_pipeline_e2e.py -q
+
+bash .\run_pipeline.sh examples\example_data.xlsx outputs\test_run
+```
+
+The bundled `examples/example_data.xlsx` workbook is deterministic. It contains synthetic sample rows, CRM rows, and pH standard rows that exercise the full pipeline.
+
+---
+
+## Current package convention
+
+This project uses a standard `src/` package layout.
+
+Reusable code lives here:
+
+```text
+src/oa_pipeline/
+```
+
+Notebook imports should use the installed package namespace, for example:
+
+```python
+from oa_pipeline.common import die
+from oa_pipeline.stage4 import add_readiness_status
+```
+
+Do not add new top level `oa_*.py` modules. New reusable code should go into the relevant module under `src/oa_pipeline/`.
+
+There is currently no `oa_pipeline.stage1a` module. Notebook 04 uses shared utilities from `oa_pipeline.common`, `oa_pipeline.schema`, and `oa_pipeline.policy` because Stage 1A is mostly canonicalisation, presence and range flagging, and export orchestration. Add a dedicated `stage1a.py` only if substantial reusable Stage 1A logic appears.
+
+---
+
+## Notebook convention
+
+The notebooks live in:
+
+```text
+notebooks/
+```
+
+Use these paths when referring to them:
+
+```text
+notebooks/01_excel_viewer.ipynb
+notebooks/02_ta_ph_qc.ipynb
+notebooks/03_qc_output_review.ipynb
+notebooks/04_stage1a.ipynb
+notebooks/05_stage1b.ipynb
+notebooks/06_stage2.ipynb
+notebooks/07_stage3.ipynb
+notebooks/08_stage4.ipynb
+```
+
+Each notebook should have exactly one tagged `parameters` cell. The same notebook must work in two modes:
+
+1. interactive execution from Jupyter or VS Code
+2. Papermill execution through `run_pipeline.sh`
+
+Notebook code should orchestrate the workflow. Reusable logic should live in `src/oa_pipeline/`.
+
+---
 
 ## Where to add things
 
-| Adding... | Goes in... |
-|-----------|------------|
-| A new canonical column alias | `oa_schema.DEFAULT_CONFIG["canonical_candidates"]` |
-| A new range threshold | `oa_policy.RangePolicy` (defaults) and/or a stage-specific `STAGE*_DEFAULTS["range_policy"]` |
-| A new stage-1B precedence rule | `oa_stage1b.STAGE1B_DEFAULTS` |
-| A new replicate SD threshold | `oa_stage2.STAGE2_DEFAULTS["replicate_sd_thresholds"]` |
-| A new carbonate-integrity check | `oa_stage3.carbonate_integrity_checks` (or new function in `oa_stage3`) |
-| A new audit reason code | `oa_stage4.add_readiness_status` — extend `fail_def` or `review_def` |
-| A new helper used by 2+ stages | `oa_common.py` |
+| Adding or changing... | Goes in... |
+|---|---|
+| A new canonical column alias | `oa_pipeline.schema.DEFAULT_CONFIG["canonical_candidates"]` |
+| A new range threshold | `oa_pipeline.policy.RangePolicy` and/or a stage specific `STAGE*_DEFAULTS["range_policy"]` |
+| A new Stage 1B precedence rule | `oa_pipeline.stage1b.STAGE1B_DEFAULTS` |
+| A new replicate SD threshold | `oa_pipeline.stage2.STAGE2_DEFAULTS["replicate_sd_thresholds"]` |
+| A new carbonate integrity check | `oa_pipeline.stage3.carbonate_integrity_checks` or a helper in `oa_pipeline.stage3` |
+| A new Stage 4 audit reason code | `oa_pipeline.stage4.add_readiness_status` |
+| A new helper used by two or more stages | `oa_pipeline.common` |
+| TA CRM certified values | `oa_pipeline.qc_ta_ph.CRM_CERTIFIED_TA` |
+| pH standard correction logic | `oa_pipeline.qc_ta_ph` |
+| Read only output inspection helpers | `oa_pipeline.inspect` |
 | Tests for any of the above | `tests/test_<module_or_concept>.py` |
 
-The top-level README has a fuller version of this table with examples.
+The top level `README.md` has a broader version of this table with more context.
+
+---
 
 ## Style and conventions
 
-- **Modules at the project root, no `src/`.** Top-level `oa_*.py` files;
-  notebooks import them with `from oa_common import die`. Don't move
-  modules into a subdirectory without coordinating with the EOI/VISS
-  framing (the EOI explicitly positions a proper namespace package as
-  phase 2 work).
-- **No per-notebook redefinitions.** If a helper is used in two places,
-  it belongs in `oa_common.py`. The original 254-cell monolith
-  redefined the same helper in every section with subtly divergent
-  versions — fixing that was the primary refactor and we should not
-  drift back.
-- **Flags are advisory, never destructive.** No stage should drop or
-  overwrite rows. Add a `flag_*` column, write a long-format audit
-  table, and let the analyst filter on `analysis_audit_status`.
-- **Single tagged `parameters` cell per notebook.** Use the existing
-  cells as templates. Defaults should point at the canonical output
-  path of the previous stage.
-- **Filename convention**: identity in folder, role in filename
-  (`oa_stage<N>_outputs/data/enhanced.csv`, not
-  `<input_stem>__stage<N>__enhanced.csv`). The JWST input/output
-  convention.
-- **Cite in the README, not in the code.** Per-stage `.README.md`
-  carries the citations; module docstrings note the *concept* and
-  point at the README.
+### Keep helpers centralised
 
-## Pull-request workflow
+If a helper is used in two or more places, put it in `oa_pipeline.common` or in a more specific shared module. Do not redefine the same helper in multiple notebooks.
 
-1. **Open an issue first** for non-trivial changes (new stage, new
-   threshold, schema change). The pipeline has scientific
-   implications; agreeing on the design before the code is faster than
-   reviewing a PR.
-2. **One change per PR.** Easier to review, easier to revert.
-3. **Update the relevant README.** If you change behaviour, update
-   `<stage>.README.md` §6 ("What changed") and the top-level lookup
-   table.
-4. **Add or update a test.** Even one test that pins the new behaviour
-   is enough — see `tests/` for examples.
-5. **Run the full chain locally** (`./run_pipeline.sh examples/example_dataset.xlsx outputs/`)
-   before opening the PR.
+### Flags are advisory, never destructive
+
+No stage should silently drop rows. Add a `flag_*` column, write an audit table where appropriate, and let the analyst filter on `analysis_audit_status`.
+
+### Preserve provenance
+
+When a value is selected from multiple possible source columns, preserve the source. Best source fields such as `ta_best_umolkg` and `ph_best` should have source tracking where possible.
+
+### Keep filenames stable
+
+Use role based filenames inside stage output folders, for example:
+
+```text
+oa_stage2_outputs/data/enhanced.csv
+oa_stage4_outputs/data/analysis_ready.csv
+```
+
+Do not create long filenames by accumulating every previous input stem.
+
+### Use `python -m` for Python commands
+
+Prefer:
+
+```bash
+python -m pytest -q
+python -m pip install -e ".[all]"
+python -m pip freeze
+```
+
+This helps ensure commands run in the same interpreter where the package is installed.
+
+### Cite scientific changes in documentation
+
+Thresholds, precision targets, pH scale assumptions, DIC tolerance rules, and CRM or pH buffer values are scientific decisions. Explain the source in the relevant README or documentation, not only in code comments.
+
+---
+
+## Testing expectations
+
+Run the full test suite before opening a pull request:
+
+```bash
+python -m pytest -q
+```
+
+Run targeted tests while debugging:
+
+```bash
+python -m pytest tests/test_coalesce.py -q
+python -m pytest tests/test_schema.py -q
+python -m pytest tests/test_readiness.py -q
+python -m pytest tests/test_pipeline_e2e.py -q
+```
+
+For changes affecting any of the following, always run the E2E test:
+
+```bash
+python -m pytest tests/test_pipeline_e2e.py -q
+```
+
+Run the E2E test when you change:
+
+- stage handoffs
+- output filenames
+- notebook parameters
+- `run_pipeline.sh`
+- schema aliases that affect the example workbook
+- PASS / REVIEW / FAIL logic
+- Stage 3 or Stage 4 reason codes
+- the example workbook generator
+- config loading
+
+The E2E test runs the full notebook chain over `examples/example_data.xlsx` with Papermill.
+
+---
+
+## Pull request workflow
+
+1. Open an issue first for non trivial changes, especially changes that affect scientific thresholds, schema, row verdicts, or output contracts.
+2. Keep one conceptual change per pull request.
+3. Update the relevant documentation if behavior changes.
+4. Add or update tests.
+5. Regenerate the deterministic example workbook if needed.
+6. Run the full test suite.
+7. Run the full notebook chain locally.
+
+Recommended command sequence before opening a PR:
+
+```bash
+python examples/make_example_data.py --out examples/example_data.xlsx
+./run_pipeline.sh examples/example_data.xlsx outputs/test_run
+python -m pytest -q
+python -m pytest tests/test_pipeline_e2e.py -q
+```
+
+On Windows PowerShell, use:
+
+```powershell
+python examples\make_example_data.py --out examples\example_data.xlsx
+bash .\run_pipeline.sh examples\example_data.xlsx outputs\test_run
+python -m pytest -q
+python -m pytest tests\test_pipeline_e2e.py -q
+```
+
+---
 
 ## Scientific changes
 
-Threshold edits (range bounds, SD thresholds, DIC tolerances, pH
-diagnostic tolerance) are scientific decisions, not parameter tweaks.
-If you change a default in `STAGE*_DEFAULTS` or `RangePolicy`:
+Threshold edits are scientific decisions, not cosmetic parameter tweaks.
 
-- Note the source in the README (which paper / GOA-ON tier / SOP
-  recommends the new value).
-- Run the smoke-test chain on the example dataset and check the
-  PASS/REVIEW/FAIL counts. A change that silently promotes rows from
-  REVIEW to PASS is a downgrade in QC strictness; a change that
-  silently does the opposite is a downgrade in inclusiveness.
-- Add a test that pins the new threshold value, so future-you can see
-  the deliberate choice in the diff.
+Examples include:
+
+- salinity, temperature, TA, DIC, pCO2, and omega range bounds
+- replicate SD thresholds
+- DIC species sum tolerance
+- pH diagnostic tolerance
+- pH scale acceptance rules
+- Stage 4 FAIL versus REVIEW severity tiers
+
+If you change a scientific default:
+
+1. document the reason
+2. cite the relevant source in the documentation
+3. run the example pipeline
+4. check PASS / REVIEW / FAIL counts
+5. add or update a test that pins the new behavior
+
+A change that silently promotes rows from REVIEW to PASS weakens QC. A change that silently promotes many rows from PASS to REVIEW or FAIL may be scientifically justified, but it must be documented.
+
+---
+
+## Configuration changes
+
+The runner supports optional per stage config files through:
+
+```bash
+./run_pipeline.sh INPUT_XLSX OUTPUT_ROOT --config-dir configs
+```
+
+It looks for files such as:
+
+```text
+configs/02_ta_ph_qc.yaml
+configs/04_stage1a.yaml
+configs/05_stage1b.yaml
+configs/06_stage2.yaml
+configs/07_stage3.yaml
+configs/08_stage4.yaml
+```
+
+The same files may also use `.yml` or `.json`.
+
+If a per stage config file is absent, that stage uses built in defaults and the runner prints a warning.
+
+Broader files such as these can be kept as templates or manually merged into per stage configs:
+
+```text
+configs/cruise_grade_thresholds.yaml
+configs/regional.yaml
+```
+
+---
 
 ## Bug reports
 
 Open an issue with:
 
-- A minimal reproducer (input file or synthetic data + the command
-  that failed).
-- The `outputs/oa_<stage>_outputs/logs/manifest.json` of the suspect
-  stage.
-- The package versions: `pip freeze`.
+- a minimal reproducer, ideally a small input workbook or synthetic dataframe
+- the exact command that failed
+- the relevant `outputs/oa_<stage>_outputs/logs/manifest.json`
+- the relevant `outputs/oa_<stage>_outputs/reports/report.md`
+- package versions from:
 
-The manifests record the input path, parameters, thresholds, package
-versions, and row counts at each step — most "why did this flag/skip"
-questions are answerable from them.
+```bash
+python -m pip freeze
+```
+
+The manifests record input paths, parameters, thresholds, package versions, row counts, and output paths. Most questions about why a row was flagged or skipped can be answered from those files.
+
+---
 
 ## Code of conduct
 
-Be kind. Assume good faith. The pipeline is small enough that we can
-afford to disagree well.
+Be kind. Assume good faith. Disagreements are expected in scientific software, especially around thresholds and QC severity. Make the reasoning explicit and keep the discussion focused on evidence, reproducibility, and auditability.
+
+---
 
 ## License
 
-By contributing you agree your contributions are licensed under the
-[MIT License](LICENSE) that covers the rest of the project.
+By contributing, you agree that your contributions are licensed under the MIT License that covers the rest of the project.

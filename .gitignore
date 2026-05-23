@@ -5,6 +5,7 @@
 # ---------------------------------------------------------------------
 # Pipeline outputs
 # These are reproducible from input data, code, config, and environment.
+# Keep only the folder placeholder.
 # ---------------------------------------------------------------------
 
 outputs/*
@@ -70,14 +71,21 @@ pip-wheel-metadata/
 .pytest_cache/
 .pytest_runs/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+junit.xml
 
 # ---------------------------------------------------------------------
-# Type checking and linting caches
+# Type checking, linting, and tool caches
 # ---------------------------------------------------------------------
 
 .mypy_cache/
 .ruff_cache/
+.pyright/
+.tox/
+.nox/
+.hypothesis/
 
 # ---------------------------------------------------------------------
 # Jupyter
@@ -104,12 +112,30 @@ Thumbs.db
 desktop.ini
 
 # ---------------------------------------------------------------------
+# Office temporary lock files
+# These are commonly created when Excel workbooks are open on Windows.
+# ---------------------------------------------------------------------
+
+~$*.xlsx
+~$*.xls
+~$*.xlsm
+
+# ---------------------------------------------------------------------
 # Local environment and secret files
 # ---------------------------------------------------------------------
 
 .env
 .env.*
 !.env.example
+
+# ---------------------------------------------------------------------
+# Local reproducibility snapshots
+# These should usually be archived with run outputs, not committed.
+# Remove these lines only if you intentionally maintain a project lock file.
+# ---------------------------------------------------------------------
+
+requirements-lock.txt
+pip-freeze.txt
 
 # ---------------------------------------------------------------------
 # Local scratch files

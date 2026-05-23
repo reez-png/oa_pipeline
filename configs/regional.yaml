@@ -1,14 +1,20 @@
 # =====================================================================
 # regional.yaml
-# Regional settings for the OA pipeline
+# Regional reference profile for the OA pipeline
 # =====================================================================
 #
-# Purpose:
-# This file stores location, regional domain, and carbonate chemistry
-# assumptions that should not be hardcoded inside notebooks.
+# This file stores regional context and preferred assumptions for Ghana
+# shelf / Gulf of Guinea OA work.
+#
+# It is not consumed directly by run_pipeline.sh. To apply these values,
+# map them into per-stage config files such as:
+#
+#   configs/04_stage1a.yaml
+#   configs/07_stage3.yaml
+#   configs/08_stage4.yaml
 
 version: 0.1.0
-config_type: regional
+config_type: regional_reference
 
 metadata:
   project: OA pipeline
@@ -61,27 +67,27 @@ hydrographic_context:
 
 carbonate_system:
   ph_scale: total
-  ta_unit: umol_kg
-  dic_unit: umol_kg
-  nutrient_unit: umol_kg
+  ta_unit: umol kg-1
+  dic_unit: umol kg-1
+  nutrient_unit: umol kg-1
 
-  default_input_pair: ph_total_dic
+  default_input_pair: TA + pH_observed
 
   constants_policy:
     carbonic_acid_constants: document_in_stage_report
     bisulfate_constant: document_in_stage_report
     boron_total: document_in_stage_report
     notes: >
-      The exact carbonate constants used by any CO2SYS or PyCO2SYS step
-      must be written to the stage report and manifest. Do not leave
-      constants implicit.
+      Any upstream CO2SYS or PyCO2SYS calculation should document the
+      carbonic acid constants, bisulfate constant, total boron formulation,
+      pH scale, pressure treatment, nutrient handling, and input pair.
 
   pressure_policy:
     sample_pressure_source: pressure_dbar
     allow_depth_to_pressure_conversion: true
     notes: >
       If pressure is estimated from depth, the conversion method should
-      be documented in the stage report.
+      be documented in the stage report and manifest.
 
   pH_policy:
     accepted_scales:

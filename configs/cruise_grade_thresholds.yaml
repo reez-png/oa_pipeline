@@ -1,41 +1,103 @@
 # =====================================================================
 # cruise_grade_thresholds.yaml
-# OA pipeline quality control thresholds
+# OA pipeline threshold reference profile
 # =====================================================================
 #
-# Purpose:
-# This file stores broad screening thresholds used to flag suspicious
-# carbonate chemistry, hydrographic, and station metadata values.
+# Purpose
+# -------
+# This file stores broad screening thresholds for Ghana shelf and Gulf of
+# Guinea ocean acidification data. It is intended as a human readable
+# reference profile and as a source for building operational per stage
+# configuration files.
 #
-# Important:
-# These thresholds are not final scientific acceptance rules.
-# They are first pass screening limits. Any flagged value should be
-# reviewed with cruise notes, calibration records, CRM records, station
-# metadata, and regional oceanographic context.
+# Important
+# ---------
+# This file is not consumed directly by run_pipeline.sh unless the
+# notebooks or runner are changed to load it explicitly. The current runner
+# expects optional per stage config files named like:
+#
+#     configs/07_stage3.yaml
+#     configs/08_stage4.yaml
+#
+# To apply these thresholds operationally, copy the relevant values into the
+# per stage config files using the exact keys expected by the pipeline.
+#
+# These thresholds are first pass screening limits. They are not final
+# scientific acceptance rules. Any flagged value should be reviewed with
+# cruise notes, calibration records, CRM records, station metadata, and
+# regional oceanographic context.
+# =====================================================================
 
 version: 0.1.0
-config_type: cruise_grade_thresholds
+config_type: threshold_reference
 
 metadata:
   project: OA pipeline
   region: Ghana shelf and Gulf of Guinea
   created_by: Maurice Oti Edusei
+  intended_use: Reference profile for cruise grade screening thresholds
+  consumed_directly_by_runner: false
   notes: >
-    Starter thresholds for automated screening. Adjust after checking
-    real cruise data, instrument calibration records, certified reference
-    material performance, and regional hydrography.
+    Starter thresholds for automated screening and human review. Adjust
+    after checking real cruise data, instrument calibration records,
+    certified reference material performance, station metadata, and
+    regional hydrography.
+
+usage_notes: >
+  This file documents screening thresholds and column name mappings. The
+  runner does not consume this file directly. To apply thresholds in a real
+  pipeline run, copy or translate the relevant values into per stage files
+  such as configs/07_stage3.yaml and configs/08_stage4.yaml.
+
+# ---------------------------------------------------------------------
+# Units used by this reference profile
+# ---------------------------------------------------------------------
 
 units:
   temperature: degree_C
   salinity: practical_salinity
   pressure: dbar
   depth: m
-  ta: umol_kg
-  dic: umol_kg
+  ta: umol kg-1
+  dic: umol kg-1
   ph: total_scale
-  oxygen: umol_kg
+  oxygen: umol L-1
+  nitrate_nitrite: umol L-1
+  phosphate: umol L-1
+  silicate: umol L-1
 
-required_columns:
+# ---------------------------------------------------------------------
+# Human readable source names mapped to current pipeline canonical names
+# ---------------------------------------------------------------------
+# The left hand side reflects common cruise spreadsheet language.
+# The right hand side reflects the current oa_pipeline canonical fields.
+
+pipeline_key_mapping:
+  station_id: station_id
+  sample_id: sample_id
+  latitude: latitude_deg
+  longitude: longitude_deg
+  date_time_utc: sample_date
+  temperature_degC: temperature_insitu_c
+  salinity_psu: salinity
+  pressure_dbar: pressure_output_dbar
+  depth_m: depth_m
+  ta_umol_kg: ta_best_umolkg
+  dic_umol_kg: dic_best_umol_kg
+  ph_total: ph_best
+  oxygen_umol_l: oxygen_umol_l
+  nitrate_umol_l: nitrate_nitrite_umol_l
+  phosphate_umol_l: phosphate_umol_l
+  silicate_umol_l: silicate_umol_l
+
+# ---------------------------------------------------------------------
+# Reference required fields
+# ---------------------------------------------------------------------
+# These names are human readable reference names. For operational Stage 4
+# config, use required_stage4_key_columns and required_stage4_analysis_columns
+# as shown in operational_stage_config_templates below.
+
+required_columns_reference:
   station_id: true
   sample_id: true
   latitude: true
@@ -47,88 +109,192 @@ required_columns:
   dic_umol_kg: false
   ph_total: false
 
-range_checks:
+# ---------------------------------------------------------------------
+# Broad reference range checks
+# ---------------------------------------------------------------------
+# These are intentionally broad plausibility limits for first pass screening.
+# They are not final acceptance rules.
+
+range_checks_reference:
   latitude:
+    canonical_key: latitude_deg
     min: -90
     max: 90
     severity: fail
 
   longitude:
+    canonical_key: longitude_deg
     min: -180
     max: 180
     severity: fail
 
   temperature_degC:
+    canonical_key: temperature_insitu_c
     min: 0
     max: 35
     severity: review
     notes: >
-      Broad sanity range for tropical coastal and shelf waters.
-      Tighten after reviewing Ghana shelf observations.
+      Broad sanity range for tropical coastal and shelf waters. Tighten only
+      after reviewing Ghana shelf observations and instrument records.
 
   salinity_psu:
+    canonical_key: salinity
     min: 0
-    max: 40
+    max: 42
     severity: review
     notes: >
-      Allows freshwater influenced, estuarine, coastal, and shelf samples.
+      Allows freshwater influenced, estuarine, coastal, shelf, and moderately
+      hypersaline edge cases while still catching extreme values such as 50.
 
   pressure_dbar:
+    canonical_key: pressure_output_dbar
     min: 0
     max: 6000
     severity: review
 
   depth_m:
+    canonical_key: depth_m
     min: 0
     max: 6000
     severity: review
 
   ta_umol_kg:
+    canonical_key: ta_best_umolkg
     min: 200
     max: 3000
     severity: review
     notes: >
-      Broad screening range only. Estuarine and river influenced samples
-      can differ substantially from open ocean seawater.
+      Broad screening range only. Estuarine and river influenced samples can
+      differ substantially from open ocean seawater.
 
   dic_umol_kg:
+    canonical_key: dic_best_umol_kg
     min: 200
     max: 3000
     severity: review
     notes: >
-      Broad screening range only. Review flagged values in the context
-      of salinity, temperature, biological activity, and river influence.
+      Broad screening range only. Review flagged values in the context of
+      salinity, temperature, biological activity, and river influence.
 
   ph_total:
+    canonical_key: ph_best
     min: 6.5
     max: 8.7
     severity: review
     notes: >
-      Assumes pH is reported on the total scale. Do not mix pH scales.
+      Assumes pH is reported on the total scale. Do not compare pH values
+      across mixed pH scales without conversion.
 
-  phosphate_umol_kg:
+  phosphate_umol_l:
+    canonical_key: phosphate_umol_l
     min: 0
     max: 10
     severity: review
 
-  silicate_umol_kg:
+  silicate_umol_l:
+    canonical_key: silicate_umol_l
     min: 0
     max: 200
     severity: review
 
-  nitrate_umol_kg:
+  nitrate_nitrite_umol_l:
+    canonical_key: nitrate_nitrite_umol_l
     min: 0
     max: 100
     severity: review
+
+# ---------------------------------------------------------------------
+# Operational stage config templates
+# ---------------------------------------------------------------------
+# These blocks show how to translate the reference profile into per stage
+# files consumed by run_pipeline.sh.
+#
+# Copy stage3_template into:
+#
+#     configs/07_stage3.yaml
+#
+# Copy stage4_template into:
+#
+#     configs/08_stage4.yaml
+#
+# Do not expect run_pipeline.sh to read these nested templates automatically.
+
+operational_stage_config_templates:
+  stage3_template:
+    accepted_ph_scales:
+      - total
+
+    thresholds:
+      dic_abs_tol: 10.0
+      dic_rel_tol: 0.010
+      ph_diag_tol: 0.10
+      dic_mad_k: 3.5
+      ph_mad_k: 3.5
+
+  stage4_template:
+    required_stage4_key_columns:
+      - sample_id
+      - sample_date
+      - station_id
+      - depth_round_m
+
+    required_stage4_analysis_columns:
+      - salinity
+      - temperature_insitu_c
+      - ta_best_umolkg
+      - ph_best
+
+    range_policy:
+      lat_min: -90
+      lat_max: 90
+      lon_min: -180
+      lon_max: 180
+      depth_min_m: 0
+      depth_max_m: 6000
+      sal_min: 0
+      sal_max: 42
+      temp_min_c: 0
+      temp_max_c: 35
+      ta_min_umolkg: 200
+      ta_max_umolkg: 3000
+      dic_min_umolkg: 200
+      dic_max_umolkg: 3000
+      ph_min: 6.5
+      ph_max: 8.7
+
+    dic_species_audit:
+      enabled: true
+      abs_tol_umolkg: 5.0
+      rel_tol: 0.01
+      require_matching_units: true
+
+# ---------------------------------------------------------------------
+# Missing value and duplicate policy reference
+# ---------------------------------------------------------------------
+# Stage 4 currently implements missing_key and missing_required_analysis
+# verdict logic. This section documents the intended policy in human terms.
 
 missing_value_policy:
   required_column_missing: fail
   required_value_missing: fail
   optional_value_missing: review
 
+missing_value_policy_pipeline_mapping:
+  required_column_missing: missing_key
+  required_value_missing: missing_required_analysis
+  optional_value_missing: review_only_if_stage_specific_logic_flags_it
+
 duplicate_policy:
   duplicate_sample_id: fail
   duplicate_station_time_depth: review
+  notes: >
+    The current Stage 4 duplicate check is based on configured duplicate key
+    columns. Confirm duplicate key policy before applying fail severity to all
+    duplicate sample IDs.
+
+# ---------------------------------------------------------------------
+# Audit flag vocabulary
+# ---------------------------------------------------------------------
 
 qc_flags:
   pass:
@@ -143,14 +309,26 @@ qc_flags:
     code: fail
     meaning: Value is invalid or insufficient for downstream processing.
 
+# ---------------------------------------------------------------------
+# Carbonate input pair provenance reference
+# ---------------------------------------------------------------------
+# Stage 4 currently checks whether carbon_input_pair_used is missing when
+# calculated carbonate outputs are present. Validation against accepted values
+# can be added later if needed.
+
 carbonate_pair_policy:
   accepted_input_pairs:
-    - ph_total_dic
-    - ph_total_ta
-    - ta_dic
+    - TA + pH_observed
+    - TA + pH_best
+    - pH_total + DIC
+    - TA + DIC
 
-  preferred_input_pair: ph_total_dic
+  preferred_input_pair: TA + pH_observed
+
+  provenance_columns:
+    solver: carbonate_solver
+    input_pair: carbon_input_pair_used
 
   notes: >
-    Preferred pair may vary by sample type and data quality.
-    Record the exact carbonate input pair used for every calculated output.
+    Preferred pair may vary by sample type and data quality. Record the exact
+    carbonate input pair used for every calculated carbonate output.

@@ -62,7 +62,7 @@ classifiers = [
 requires-python = ">=3.10"
 
 dependencies = [
-    "pandas>=2.2,<3.1",
+    "pandas>=2.2,<3.0",
     "numpy>=1.26,<2.5",
     "openpyxl>=3.1,<4.0",
     "matplotlib>=3.8,<4.0",
@@ -96,12 +96,15 @@ test = [
 ]
 
 # Interactive notebook editing.
+# This provides a usable kernel for Jupyter, VS Code, or PyCharm.
+# It intentionally does not install JupyterLab itself.
 notebook = [
     "ipykernel>=6.0,<8.0",
     "ipython>=8.0,<10.0",
 ]
 
 # Development convenience install.
+# Kept as an alias of all because many contributors expect a dev extra.
 dev = [
     "pyarrow>=10.0,<20.0",
     "pyyaml>=6.0,<7.0",
@@ -154,6 +157,9 @@ python_files = ["test_*.py"]
 # This lets pytest import oa_pipeline directly from src/ even before
 # editable install is fully recognised by the current shell/session.
 pythonpath = ["src"]
+
+# If a test marked xfail unexpectedly passes, treat that as a suite failure.
+xfail_strict = true
 
 addopts = [
     "-ra",

@@ -358,10 +358,11 @@ def apply_ta_crm_correction(
         (out, crm_qc, corr_table, summary)
 
     CRM detection and CRM usability are recorded separately. A CRM row with
-    missing or non numeric TA is still counted as a detected CRM row, but it is
-    not used to compute the correction.
+    missing or non numeric TA is still counted as a detected CRM row. If
+    require_ta_value_for_crm is True, such rows cause a clear failure; if False,
+    they are recorded but excluded from the correction calculation.
     """
-    del require_ta_value_for_crm
+    require_ta_value_for_crm = bool(require_ta_value_for_crm)
 
     ta_col = resolve_col(df, ta_col)
     sample_tag_col = resolve_col(df, sample_tag_col)
@@ -410,6 +411,17 @@ def apply_ta_crm_correction(
     crm_detected = out.loc[out["is_ta_crm_row"].fillna(False)].copy()
     crm = out.loc[out["is_ta_crm_usable"].fillna(False)].copy()
 
+    n_crm_missing_ta = int(
+        out.loc[out["is_ta_crm_row"].fillna(False), ta_col].isna().sum()
+    )
+
+    if require_ta_value_for_crm and n_crm_missing_ta > 0:
+        die(
+            f"{n_crm_missing_ta} TA CRM rows were detected but have missing "
+            f"or non numeric TA values. Set require_ta_value_for_crm=False "
+            f"to record these rows but exclude them from correction."
+        )
+
     crm["ta_certified_umolkg"] = ta_cert
     crm["ta_diff_umolkg"] = crm["ta_certified_umolkg"] - crm[ta_col]
     crm["ta_exceeds_sop_reject"] = (
@@ -428,8 +440,13 @@ def apply_ta_crm_correction(
         crm["ta_exceeds_sop_reject"] = pd.Series(dtype="boolean")
         crm["ta_diff_umolkg_is_outlier"] = pd.Series(dtype="boolean")
 
+    crm_for_correction = crm.loc[
+        crm["ta_diff_umolkg"].notna()
+        & ~crm["ta_diff_umolkg_is_outlier"].fillna(False)
+    ].copy()
+
     corr_table = build_corrections_table(
-        crm,
+        crm_for_correction,
         group_by=group_by_res,
         diff_col="ta_diff_umolkg",
         min_n=min_crm_n,
@@ -457,6 +474,7 @@ def apply_ta_crm_correction(
     overall_se = overall_sd / (overall_n ** 0.5) if overall_n > 0 and pd.notna(overall_sd) else float("nan")
 
     out["ta_correction_raw_umolkg"] = pd.Series(pd.NA, index=out.index, dtype="Float64")
+    out["ta_correction_level"] = pd.Series(pd.NA, index=out.index, dtype="string")
 
     if group_by_res and group_by_res in out.columns and group_by_res in corr_table.columns:
         merge_cols = [
@@ -470,8 +488,12 @@ def apply_ta_crm_correction(
             merge_cols.append("ta_corr_se")
 
         out = out.merge(corr_table[merge_cols], on=group_by_res, how="left")
-        raw = pd.to_numeric(out["ta_corr_value"], errors="coerce").fillna(overall_corr)
+        group_raw = pd.to_numeric(out["ta_corr_value"], errors="coerce")
+        has_group_corr = group_raw.notna()
+        raw = group_raw.fillna(overall_corr)
         out["ta_correction_raw_umolkg"] = raw.astype("Float64")
+        out["ta_correction_level"] = pd.Series("overall", index=out.index, dtype="string")
+        out.loc[has_group_corr, "ta_correction_level"] = "group"
     else:
         out["ta_corr_n"] = overall_n
         out["ta_corr_value"] = overall_corr
@@ -479,9 +501,13 @@ def apply_ta_crm_correction(
         out["ta_corr_se"] = overall_se
         out["ta_corr_group_has_min_n"] = overall_n >= int(min_crm_n)
         out["ta_correction_raw_umolkg"] = pd.Series(overall_corr, index=out.index, dtype="Float64")
+        out["ta_correction_level"] = pd.Series("overall", index=out.index, dtype="string")
 
     if overall_n < int(min_crm_n) or pd.isna(overall_corr):
         out["ta_correction_raw_umolkg"] = pd.NA
+        out["ta_correction_level"] = pd.NA
+
+    out.loc[out["ta_correction_raw_umolkg"].isna(), "ta_correction_level"] = pd.NA
 
     ta_status, ta_corr_applied = apply_ta_sop_auto_rule(
         out["ta_correction_raw_umolkg"],
@@ -492,9 +518,10 @@ def apply_ta_crm_correction(
     out["ta_correction_used_umolkg"] = ta_corr_applied
 
     sample_mask = out["is_ta_sample_row"].fillna(False).astype(bool)
-    eligible_mask = sample_mask if correct_only_samples else out[ta_col].notna()
-    corr_used = pd.to_numeric(out["ta_correction_used_umolkg"], errors="coerce")
     has_ta = out[ta_col].notna()
+    non_crm_with_ta = (~out["is_ta_crm_row"].fillna(False).astype(bool)) & has_ta
+    eligible_mask = sample_mask if correct_only_samples else non_crm_with_ta
+    corr_used = pd.to_numeric(out["ta_correction_used_umolkg"], errors="coerce")
 
     out["ta_correction_applied"] = (eligible_mask & has_ta & corr_used.notna()).astype("boolean")
     out["ta_correction_withheld"] = (
@@ -517,8 +544,12 @@ def apply_ta_crm_correction(
     out["ta_corrected_available"] = out["ta_corrected_umolkg"].notna().astype("boolean")
 
     crm_valid = int(crm["ta_diff_umolkg"].notna().sum()) if "ta_diff_umolkg" in crm.columns else 0
-    crm_out = int(crm["ta_diff_umolkg_is_outlier"].fillna(False).sum()) if "ta_diff_umolkg_is_outlier" in crm.columns else 0
-    crm_kept = int(crm_valid - crm_out)
+    crm_out = (
+        int((crm["ta_diff_umolkg"].notna() & crm["ta_diff_umolkg_is_outlier"].fillna(False)).sum())
+        if "ta_diff_umolkg_is_outlier" in crm.columns and "ta_diff_umolkg" in crm.columns
+        else 0
+    )
+    crm_kept = int(crm_for_correction.shape[0])
 
     overall_status = (
         "INSUFFICIENT_DATA"
@@ -537,6 +568,11 @@ def apply_ta_crm_correction(
         diagnostics.append("No TA CRM or RM rows were detected.")
     if int(crm_detected.shape[0]) > 0 and int(crm.shape[0]) == 0:
         diagnostics.append("CRM rows were detected, but none had numeric TA.")
+    if n_crm_missing_ta > 0:
+        diagnostics.append(
+            f"{n_crm_missing_ta} detected CRM rows had missing or non numeric TA "
+            "and were excluded from correction."
+        )
     if crm_valid > 0 and crm_kept == 0:
         diagnostics.append("All valid CRM differences were rejected as outliers.")
     if overall_n < int(min_crm_n):
@@ -545,6 +581,11 @@ def apply_ta_crm_correction(
         diagnostics.append("Mean TA difference exceeds the SOP reject threshold, so correction is withheld.")
     if overall_status == "NO_ADJUST":
         diagnostics.append("Mean TA difference is within the SOP no adjust threshold, so correction is forced to 0.0.")
+    if not correct_only_samples:
+        diagnostics.append(
+            "TA correction was allowed for non CRM rows with TA. CRM rows are "
+            "still never corrected because they are the basis for the correction."
+        )
 
     n_samples_flagged = int(sample_mask.sum())
     n_samples_ta_missing = int(out.loc[sample_mask, ta_col].isna().sum()) if n_samples_flagged else 0
@@ -555,6 +596,7 @@ def apply_ta_crm_correction(
     summary: Dict[str, Any] = {
         "crm_n_detected": int(crm_detected.shape[0]),
         "crm_n_usable": int(crm.shape[0]),
+        "crm_n_missing_ta": int(n_crm_missing_ta),
         "crm_n_valid": int(crm_valid),
         "crm_n_outlier": int(crm_out),
         "crm_n_kept": int(crm_kept),
@@ -571,6 +613,7 @@ def apply_ta_crm_correction(
         "n_ta_correction_applied": n_correction_applied,
         "n_ta_correction_withheld": n_correction_withheld,
         "correct_only_samples": bool(correct_only_samples),
+        "require_ta_value_for_crm": bool(require_ta_value_for_crm),
         "group_by": group_by_res,
         "min_crm_n": int(min_crm_n),
         "mad_k": float(mad_k),
@@ -700,6 +743,7 @@ def write_ta_markdown_report(
 - group_by: `{group_by if group_by else "None"}`
 - grouped correction: `{bool(group_by)}`
 - correct only samples: `{ta_summary.get("correct_only_samples")}`
+- require TA value for detected CRM rows: `{ta_summary.get("require_ta_value_for_crm")}`
 - minimum CRM N: `{ta_summary.get("min_crm_n")}`
 - MAD k: `{ta_summary.get("mad_k")}`
 - max absolute difference threshold: `{ta_summary.get("max_abs_diff")}`
@@ -709,6 +753,7 @@ def write_ta_markdown_report(
 ## Counts
 - CRM detected: {ta_summary.get("crm_n_detected")}
 - CRM usable: {ta_summary.get("crm_n_usable")}
+- CRM missing or non numeric TA: {ta_summary.get("crm_n_missing_ta")}
 - CRM valid: {ta_summary.get("crm_n_valid")}
 - CRM kept: {ta_summary.get("crm_n_kept")}
 - CRM outliers: {ta_summary.get("crm_n_outlier")}
@@ -893,11 +938,19 @@ def apply_ph_standard_qc_and_correction(
 
     n_valid = int(std["phstd_diff"].notna().sum()) if "phstd_diff" in std.columns else 0
     n_temp_outside = int(std["flag_phstd_temp_outside_table"].fillna(False).sum()) if "flag_phstd_temp_outside_table" in std.columns else 0
-    n_outlier = int(std["phstd_diff_is_outlier"].fillna(False).sum()) if n_valid > 0 else 0
-    n_kept = int(n_valid - n_outlier)
+    n_outlier = (
+        int((std["phstd_diff"].notna() & std["phstd_diff_is_outlier"].fillna(False)).sum())
+        if "phstd_diff" in std.columns and "phstd_diff_is_outlier" in std.columns
+        else 0
+    )
+    std_for_correction = std.loc[
+        std["phstd_diff"].notna()
+        & ~std["phstd_diff_is_outlier"].fillna(False)
+    ].copy()
+    n_kept = int(std_for_correction.shape[0])
 
     corr_table = build_corrections_table(
-        std,
+        std_for_correction,
         group_by=group_by_res,
         diff_col="phstd_diff",
         min_n=min_std_n,
@@ -938,6 +991,7 @@ def apply_ph_standard_qc_and_correction(
         out.loc[std.index, "flag_phstd_temp_outside_table"] = std["flag_phstd_temp_outside_table"].astype("boolean")
 
     out["phstd_correction_raw"] = pd.Series(pd.NA, index=out.index, dtype="Float64")
+    out["phstd_correction_level"] = pd.Series(pd.NA, index=out.index, dtype="string")
 
     if group_by_res and group_by_res in out.columns and group_by_res in corr_table.columns:
         merge_cols = [
@@ -951,8 +1005,12 @@ def apply_ph_standard_qc_and_correction(
             merge_cols.append("phstd_corr_se")
 
         out = out.merge(corr_table[merge_cols], on=group_by_res, how="left")
-        raw = pd.to_numeric(out["phstd_corr_value"], errors="coerce").fillna(overall_corr)
+        group_raw = pd.to_numeric(out["phstd_corr_value"], errors="coerce")
+        has_group_corr = group_raw.notna()
+        raw = group_raw.fillna(overall_corr)
         out["phstd_correction_raw"] = raw.astype("Float64")
+        out["phstd_correction_level"] = pd.Series("overall", index=out.index, dtype="string")
+        out.loc[has_group_corr, "phstd_correction_level"] = "group"
     else:
         out["phstd_corr_n"] = overall_n_kept
         out["phstd_corr_value"] = overall_corr
@@ -960,9 +1018,13 @@ def apply_ph_standard_qc_and_correction(
         out["phstd_corr_se"] = overall_se
         out["phstd_corr_group_has_min_n"] = overall_n_kept >= int(min_std_n)
         out["phstd_correction_raw"] = pd.Series(overall_corr, index=out.index, dtype="Float64")
+        out["phstd_correction_level"] = pd.Series("overall", index=out.index, dtype="string")
 
     if overall_n_kept < int(min_std_n) or pd.isna(overall_corr):
         out["phstd_correction_raw"] = pd.NA
+        out["phstd_correction_level"] = pd.NA
+
+    out.loc[out["phstd_correction_raw"].isna(), "phstd_correction_level"] = pd.NA
 
     out["phstd_status"] = (
         out["phstd_correction_raw"]
@@ -984,20 +1046,44 @@ def apply_ph_standard_qc_and_correction(
     sample_mask = out["is_ph_sample_row"].fillna(False).astype(bool)
     corr_used = pd.to_numeric(out["phstd_correction_used"], errors="coerce")
     has_ph = out[ph_col].notna()
+    sample_with_ph = sample_mask & has_ph
 
-    out["phstd_correction_applied"] = (sample_mask & has_ph & corr_used.notna()).astype("boolean")
+    out["phstd_correction_applied"] = (
+        bool(correct_samples)
+        & sample_with_ph
+        & corr_used.notna()
+    ).astype("boolean")
+
     out["phstd_correction_withheld"] = (
-        sample_mask
-        & has_ph
+        sample_with_ph
         & out["phstd_status"].isin(["FAIL", "INSUFFICIENT_DATA", "WARN"])
         & corr_used.isna()
     ).astype("boolean")
 
-    out["ph_corrected_from_phstd"] = pd.Series(pd.NA, index=out.index, dtype="Float64")
+    out["ph_corrected_from_phstd"] = pd.Series(
+        pd.NA,
+        index=out.index,
+        dtype="Float64",
+    )
 
     if correct_samples:
-        valid = sample_mask & has_ph & corr_used.notna()
-        out.loc[valid, "ph_corrected_from_phstd"] = out.loc[valid, ph_col] + corr_used.loc[valid]
+        valid = sample_with_ph & corr_used.notna()
+
+        out.loc[valid, "ph_corrected_from_phstd"] = (
+            out.loc[valid, ph_col] + corr_used.loc[valid]
+        )
+
+        fallback = sample_with_ph & ~valid
+        out.loc[fallback, "ph_corrected_from_phstd"] = out.loc[fallback, ph_col]
+    else:
+        out.loc[sample_with_ph, "ph_corrected_from_phstd"] = out.loc[
+            sample_with_ph,
+            ph_col,
+        ]
+
+    out["ph_corrected_available"] = (
+        out["ph_corrected_from_phstd"].notna().astype("boolean")
+    )
 
     overall_status = ph_status_from_mean(
         overall_corr if overall_n_kept >= int(min_std_n) else float("nan"),
@@ -1026,6 +1112,7 @@ def apply_ph_standard_qc_and_correction(
 
     n_samples_flagged = int(sample_mask.sum())
     n_samples_ph_missing = int(out.loc[sample_mask, ph_col].isna().sum()) if n_samples_flagged else 0
+    n_samples_ph_corrected_available = int(out.loc[sample_mask, "ph_corrected_available"].sum()) if n_samples_flagged else 0
     n_correction_applied = int(out["phstd_correction_applied"].fillna(False).sum())
     n_correction_withheld = int(out["phstd_correction_withheld"].fillna(False).sum())
 
@@ -1053,6 +1140,7 @@ def apply_ph_standard_qc_and_correction(
         "status_warn": float(status_thr.warn),
         "n_samples_flagged": n_samples_flagged,
         "n_samples_ph_missing": n_samples_ph_missing,
+        "n_samples_ph_corrected_available": n_samples_ph_corrected_available,
         "n_phstd_correction_applied": n_correction_applied,
         "n_phstd_correction_withheld": n_correction_withheld,
         "apply_warn_correction": bool(apply_warn_correction),
@@ -1190,6 +1278,7 @@ def write_phstd_markdown_report(
 ## Reference table
 - pH buffer table source: {ph_summary.get("ph_buffer_table_source")}
 - table temperature range: {ph_summary.get("ph_buffer_table_temperature_range_c")} deg C
+- expected pH method: table lookup with linear temperature interpolation, not a full buffer composition model
 - temperature clamping allowed: `{ph_summary.get("allow_temp_clamp")}`
 - standard temperature range observed: {fmt(ph_summary.get("temperature_min_c"), nd=2)} to {fmt(ph_summary.get("temperature_max_c"), nd=2)} deg C
 
@@ -1215,6 +1304,7 @@ def write_phstd_markdown_report(
 - outliers: {ph_summary.get("n_outlier")}
 - sample rows detected: {ph_summary.get("n_samples_flagged")}
 - sample rows missing pH: {ph_summary.get("n_samples_ph_missing")}
+- sample rows with corrected or original pH available: {ph_summary.get("n_samples_ph_corrected_available")}
 - rows where pH correction was applied: {ph_summary.get("n_phstd_correction_applied")}
 - rows where pH correction was withheld: {ph_summary.get("n_phstd_correction_withheld")}
 

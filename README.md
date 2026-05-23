@@ -1,506 +1,461 @@
 # oa_pipeline
 
-Eight-notebook preprocessing pipeline for ocean-acidification carbonate
-chemistry data. Reads an Excel workbook of TA / pH / temperature /
-salinity / DIC measurements, applies CRM-corrected QC, harmonises
-canonical column names, builds best-source analysis fields, checks
-duplicates and replicates, runs carbonate-system internal-consistency
-checks, and produces an analysis-ready CSV with a per-row
-PASS / REVIEW / FAIL verdict.
+Eight notebook preprocessing pipeline for ocean acidification carbonate chemistry data.
+
+The pipeline reads an Excel workbook containing TA, pH, temperature, salinity, DIC, and related carbonate chemistry measurements. It applies CRM corrected TA QC, pH standard correction, canonical column harmonisation, best source analysis field selection, duplicate and replicate checks, carbonate system internal consistency diagnostics, and a final per row audit verdict.
+
+Final output:
+
+```text
+PASS / REVIEW / FAIL per row
+analysis_ready.csv
+```
+
+## Pipeline flow
 
 ```text
 oa_prelim_data.xlsx
         │
-        │ (Notebook 01 optional: HTML preview of each sheet)
+        │ Notebook 01 optional: Excel sheet preview
         ▼
-   02_ta_ph_qc          ─→  derived.csv         (CRM + pH-std corrections)
+   02_ta_ph_qc
         │
-        │ (Notebook 03 optional: inspect 02's outputs)
+        │ derived.csv
+        │ CRM TA correction and pH standard correction
         ▼
-   04_stage1a           ─→  staged.csv          (canonical schema, alias resolution)
-        ▼                   analysis_ready.csv
-   05_stage1b           ─→  analysis_fields.csv (best-source coalescing)
-        ▼                   analysis_ready_samples.csv
-   06_stage2            ─→  enhanced.csv        (duplicates + replicate harmonisation)
+   04_stage1a
+        │
+        │ staged.csv
+        │ canonical schema and alias resolution
         ▼
-   07_stage3            ─→  enhanced.csv        (DIC species-sum + pH diagnostic)
+   05_stage1b
+        │
+        │ analysis_ready_samples.csv
+        │ best source fields such as ta_best_umolkg and ph_best
         ▼
-   08_stage4            ─→  analysis_ready.csv  ◄── the final deliverable
-                            + PASS / REVIEW / FAIL verdict per row
+   06_stage2
+        │
+        │ enhanced.csv
+        │ duplicate checks and replicate harmonisation
+        ▼
+   07_stage3
+        │
+        │ enhanced.csv
+        │ DIC species sum and pH diagnostic checks
+        ▼
+   08_stage4
+        │
+        │ analysis_ready.csv
+        │ final PASS / REVIEW / FAIL verdicts
+        ▼
+final analysis ready dataset
 ```
+
+Notebook 03 is optional and provides a read only inspection layer for Notebook 02 outputs.
 
 ---
 
 ## Quick start
 
-```bash
-# 1. Set up the environment (one-time)
+### Windows PowerShell
+
+```powershell
 python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"            # editable install + tests + papermill + parquet
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[all]"
 
-# 2. Build the bundled example dataset (one-time, deterministic)
-python examples/make_example_data.py
-
-# 3. Run the whole chain end-to-end on the example
-./run_pipeline.sh examples/example_data.xlsx ./outputs
-
-# 4. The final deliverable
-head outputs/oa_stage4_outputs/data/analysis_ready.csv
-
-# 5. (Optional) run the test suite — 57 tests, ~15 seconds
-pytest
+python examples\make_example_data.py
+bash .\run_pipeline.sh examples\example_data.xlsx outputs\test_run
+python -m pytest -q
 ```
 
-There is also a [quickstart tutorial notebook](examples/quickstart.ipynb)
-that walks through the same flow interactively and shows how to trace a
-flagged row back through the per-stage audit tables.
+### Git Bash, macOS, or Linux
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[all]"
+
+python examples/make_example_data.py
+./run_pipeline.sh examples/example_data.xlsx outputs/test_run
+python -m pytest -q
+```
+
+The final deliverable from the example run is:
+
+```text
+outputs/test_run/oa_stage4_outputs/data/analysis_ready.csv
+```
+
+The bundled example workbook has one sheet named `oa_data`, so Notebook 02 writes:
+
+```text
+outputs/test_run/oa_prelim_data__qc_outputs/sheet_oa_data/data/derived.csv
+```
+
+For other workbooks, Notebook 02 writes one folder per processed sheet using this pattern:
+
+```text
+outputs/<run_name>/oa_prelim_data__qc_outputs/sheet_<safe_sheet_name>/data/derived.csv
+```
 
 ---
 
-## Recommended on-disk layout
+## Recommended on disk layout
 
-Three things matter about this layout and they are all easy to get wrong:
+This project uses a standard `src/` package layout. The notebooks are orchestration layers. Reusable logic lives in the installable `oa_pipeline` package under `src/oa_pipeline/`.
 
-1. **Modules sit at the project root** alongside the notebooks — *not*
-   in a `src/` subfolder. Notebooks `from oa_common import die` work
-   without setup because the working directory is on Python's path
-   automatically.
-2. **`examples/` and `tests/` are real subfolders.** If you scatter
-   `example_data.xlsx`, `quickstart.ipynb`, `conftest.py`, and the
-   `test_*.py` files at the project root, `pytest` will skip them
-   (the `pyproject.toml` says `testpaths = ["tests"]`) and the
-   integration test will fail to find `examples/example_data.xlsx`.
-3. **`outputs/` and `runs/` are reproducible artefacts.** They are
-   `.gitignore`d and should not be synced to OneDrive — see the
-   "Note for OneDrive users" below.
+After installation with:
+
+```bash
+python -m pip install -e ".[all]"
+```
+
+notebooks and tests import modules like this:
+
+```python
+from oa_pipeline.common import die
+from oa_pipeline.stage4 import add_readiness_status
+```
+
+Recommended project structure:
 
 ```text
-oa_pipeline/                          ← project root, what you cd into
+oa_pipeline/
 │
-├── README.md                          ← this file
-├── CONTRIBUTING.md                    ← contributor orientation
-├── LICENSE                            ← MIT
-├── pyproject.toml                     ← packaging + pytest config
-├── requirements.txt                   ← Python deps (pinned lower bounds)
-├── run_pipeline.sh                    ← one-command runner
+├── README.md
+├── CONTRIBUTING.md
+├── LICENSE
+├── pyproject.toml
+├── requirements.txt
+├── run_pipeline.sh
 ├── .gitignore
 │
-├── 01_excel_viewer.ipynb              ← the eight notebooks
-├── 01_excel_viewer.README.md             (READMEs sit next to their notebook
-├── 02_ta_ph_qc.ipynb                      so you can edit them side-by-side)
-├── 02_ta_ph_qc.README.md
-├── 03_qc_output_review.ipynb
-├── 03_qc_output_review.README.md
-├── 04_stage1a.ipynb
-├── 04_stage1a.README.md
-├── 05_stage1b.ipynb
-├── 05_stage1b.README.md
-├── 06_stage2.ipynb
-├── 06_stage2.README.md
-├── 07_stage3.ipynb
-├── 07_stage3.README.md
-├── 08_stage4.ipynb
-├── 08_stage4.README.md
+├── configs/
+│   ├── cruise_grade_thresholds.yaml
+│   └── regional.yaml
 │
-├── oa_common.py                       ← shared modules (imported by notebooks)
-├── oa_inspect.py                          Python finds them automatically
-├── oa_policy.py                           because they sit at the project root
-├── oa_qc_ta_ph.py                         next to the notebooks.
-├── oa_schema.py
-├── oa_stage1b.py
-├── oa_stage2.py
-├── oa_stage3.py
-├── oa_stage4.py
+├── data/
+│   ├── raw/
+│   ├── interim/
+│   ├── processed/
+│   └── external/
 │
-├── examples/                          ← bundled synthetic dataset + tutorial
-│   ├── make_example_data.py              deterministic generator (fixed seed)
-│   ├── example_data.xlsx                 27-row dataset: 20 samples + 4 CRMs +
-│   │                                     3 pH standards, four sample rows
-│   │                                     deliberately broken so the pipeline
-│   │                                     has known issues to flag
-│   └── quickstart.ipynb                  17-cell tutorial that runs the chain
-│                                         on the example data
+├── examples/
+│   ├── make_example_data.py
+│   ├── example_data.xlsx
+│   └── quickstart.ipynb
 │
-├── tests/                             ← pytest suite, 57 tests, ~15s end-to-end
-│   ├── __init__.py                       marker file so pytest treats this as a package
-│   ├── conftest.py                       shared fixtures
-│   ├── test_coalesce.py                  Stage 1B best-source picker
-│   ├── test_schema.py                    alias resolution + duplicate-key bug
-│   ├── test_readiness.py                 Stage 4 PASS/REVIEW/FAIL classifier
-│   └── test_pipeline_e2e.py              full chain on example_data.xlsx
+├── notebooks/
+│   ├── 01_excel_viewer.ipynb
+│   ├── 02_ta_ph_qc.ipynb
+│   ├── 03_qc_output_review.ipynb
+│   ├── 04_stage1a.ipynb
+│   ├── 05_stage1b.ipynb
+│   ├── 06_stage2.ipynb
+│   ├── 07_stage3.ipynb
+│   └── 08_stage4.ipynb
 │
-├── configs/                           ← (optional) YAML / JSON config overrides
-│   ├── 04_stage1a.yaml                    one file per stage, named after the
-│   ├── 06_stage2.yaml                     notebook; the runner picks them up
-│   └── 08_stage4.yaml                     with `--config-dir configs/`
+├── src/
+│   └── oa_pipeline/
+│       ├── __init__.py
+│       ├── common.py
+│       ├── inspect.py
+│       ├── policy.py
+│       ├── qc_ta_ph.py
+│       ├── schema.py
+│       ├── stage1b.py
+│       ├── stage2.py
+│       ├── stage3.py
+│       └── stage4.py
 │
-├── data/                              ← (optional) input data; can live anywhere
-│   └── oa_prelim_data.xlsx
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── test_coalesce.py
+│   ├── test_pipeline_e2e.py
+│   ├── test_readiness.py
+│   └── test_schema.py
 │
-├── outputs/                           ← per-stage output trees (gitignore this)
-│   ├── oa_prelim_data__qc_outputs/        from Notebook 02
-│   │   └── sheet_0/
-│   │       ├── data/derived.csv           ◄── Stage 1A reads this
-│   │       ├── tables/...
-│   │       ├── reports/...
-│   │       └── logs/...
-│   ├── oa_stage1a_outputs/                from Notebook 04
-│   │   ├── data/staged.csv                ◄── Stage 1B reads this
-│   │   ├── data/analysis_ready.csv
-│   │   └── ...
-│   ├── oa_stage1b_outputs/                from Notebook 05
-│   ├── oa_stage2_outputs/                 from Notebook 06
-│   ├── oa_stage3_outputs/                 from Notebook 07
-│   └── oa_stage4_outputs/                 from Notebook 08
-│       ├── data/
-│       │   └── analysis_ready.csv         ◄── the final deliverable
-│       ├── tables/
-│       │   ├── range_flags_long.csv
-│       │   ├── dic_species_audit.csv
-│       │   └── ...
-│       ├── reports/report.md
-│       └── logs/manifest.json
-│
-└── runs/                              ← papermill-executed notebooks (gitignore this)
-    └── 2026-05-16T12-24-19Z/              one folder per pipeline run, timestamped
-        ├── 02_ta_ph_qc.run.ipynb          fully-executed copy of each notebook,
-        ├── 04_stage1a.run.ipynb           with cell outputs preserved for the audit
-        └── ...
+├── outputs/
+└── runs/
 ```
 
 ### Why this layout
 
-- **Modules sit at the project root** rather than in a `src/` subfolder.
-  Python's default `sys.path` includes the working directory, so notebooks
-  just `from oa_common import die` with no setup. The `src/` convention is
-  for installable packages; this is a pipeline that runs in place.
-- **READMEs sit next to their notebook.** Open the .ipynb in Jupyter, open
-  the .md in any editor, edit them side by side. Stashing docs in a `docs/`
-  folder makes editing harder and provides no benefit when you have eight
-  README files.
-- **`outputs/` and `runs/` are gitignored.** Pipeline output is reproducible
-  from input + code + config; checking it into git creates a noisy diff and
-  bloats history. Add this to `.gitignore`:
-  ```
-  outputs/
-  runs/
-  .venv/
-  __pycache__/
-  ```
-- **`configs/` is a convention, not a requirement.** Most users won't need
-  it. When you do (e.g. cruise-grade SD thresholds, regional range
-  bounds), one YAML per stage with a fixed name keeps the runner simple.
+The `src/` layout makes the pipeline behave like a real Python package. It prevents accidental imports from the current working directory and makes notebooks, tests, and command line runs use the same package code after installation.
 
-### Note for OneDrive users
+The `notebooks/` folder contains the eight Papermill driven workflow stages.
 
-The original workbook lives in OneDrive. **Put the *project* somewhere
-else** — a local SSD path like `~/projects/oa_pipeline/`. The pipeline
-writes thousands of small files into `outputs/` and `runs/`; OneDrive
-will try to sync each one and you'll either run out of throughput or hit
-the file-count cap. The xlsx itself can stay in OneDrive — the runner
-just reads it, it never writes back.
+The `examples/` folder contains the deterministic synthetic workbook generator and the bundled example workbook used by the end to end test.
+
+The `outputs/` and `runs/` folders are reproducible artifacts. They should be ignored by Git because they can be recreated from the input workbook, code, and configuration.
+
+---
+
+## Note for OneDrive users
+
+The input workbook can live in OneDrive, but the project folder should ideally live outside OneDrive, for example:
+
+```text
+C:\Users\<you>\projects\oa_pipeline
+```
+
+The pipeline writes many small files into `outputs/` and `runs/`. OneDrive may slow down, lock files, or sync partial outputs while the pipeline is still running.
 
 ---
 
 ## The eight notebooks at a glance
 
-Each notebook is a self-contained Papermill-driven stage. Restart-and-run-all
-on any one works; the chain is glued together by deterministic output paths.
+Each notebook is a Papermill driven stage. The runner wires the output of one stage into the input of the next stage.
 
 | # | Notebook | Role | Reads | Writes |
-|--:|----------|------|-------|--------|
-| 01 | `01_excel_viewer.ipynb` | **Optional.** Sheet-by-sheet HTML preview. No downstream consumer. | `<INPUT_XLSX>` | `oa_viewer_outputs/sheet_<x>/{data,tables}/` |
-| 02 | `02_ta_ph_qc.ipynb` | **Critical path start.** TA CRM correction + pH-standard correction with Dickson SOP buffer tables. | `<INPUT_XLSX>` | `oa_prelim_data__qc_outputs/sheet_<x>/data/derived.csv` |
-| 03 | `03_qc_output_review.ipynb` | **Optional.** Read-only inspector for Stage 02's outputs. No downstream consumer. | Stage 02 output tree | `oa_qc_review_outputs/` |
-| 04 | `04_stage1a.ipynb` | Canonical schema, alias resolution, range / presence / duplicate flags. | `<qc>/sheet_<x>/data/derived.csv` | `oa_stage1a_outputs/data/{staged.csv, analysis_ready.csv}` |
-| 05 | `05_stage1b.ipynb` | **Best-source coalescing.** Builds `ta_best_umolkg`, `ph_best`, etc., with per-row source tracking. | `<stage1a>/data/staged.csv` | `oa_stage1b_outputs/data/analysis_ready_samples.csv` |
-| 06 | `06_stage2.ipynb` | **Cross-row aggregation.** Duplicate detection + replicate harmonisation with GOA-ON SD thresholds. | `<stage1b>/data/analysis_ready_samples.csv` | `oa_stage2_outputs/data/enhanced.csv` |
-| 07 | `07_stage3.ipynb` | **Scientific QC.** DIC species-sum check + pH best-vs-CO2SYS diagnostic. | `<stage2>/data/enhanced.csv` | `oa_stage3_outputs/data/enhanced.csv` |
-| 08 | `08_stage4.ipynb` | **Verdict layer.** PASS / REVIEW / FAIL classification with reason codes. | `<stage3>/data/enhanced.csv` | `oa_stage4_outputs/data/analysis_ready.csv` |
+|---:|---|---|---|---|
+| 01 | `notebooks/01_excel_viewer.ipynb` | Optional Excel sheet preview | Input workbook | `oa_viewer_outputs/` |
+| 02 | `notebooks/02_ta_ph_qc.ipynb` | TA CRM correction and pH standard correction | Input workbook | `oa_prelim_data__qc_outputs/sheet_<safe_sheet_name>/data/derived.csv` |
+| 03 | `notebooks/03_qc_output_review.ipynb` | Optional read only review of Notebook 02 outputs | Notebook 02 output tree | Review tables and previews |
+| 04 | `notebooks/04_stage1a.ipynb` | Canonical schema, alias resolution, range and presence flags | Notebook 02 `derived.csv` | `oa_stage1a_outputs/data/staged.csv` and `analysis_ready.csv` |
+| 05 | `notebooks/05_stage1b.ipynb` | Best source coalescing | Stage 1A `staged.csv` | `oa_stage1b_outputs/data/analysis_ready_samples.csv` |
+| 06 | `notebooks/06_stage2.ipynb` | Duplicate checks and replicate harmonisation | Stage 1B `analysis_ready_samples.csv` | `oa_stage2_outputs/data/enhanced.csv` |
+| 07 | `notebooks/07_stage3.ipynb` | DIC species sum and pH diagnostic checks | Stage 2 `enhanced.csv` | `oa_stage3_outputs/data/enhanced.csv` |
+| 08 | `notebooks/08_stage4.ipynb` | Final audit verdict layer | Stage 3 `enhanced.csv` | `oa_stage4_outputs/data/analysis_ready.csv` |
 
-Each notebook's own `.README.md` has the detailed design rationale,
-citations, and known limitations. Read them when you want to know
-*why* a stage does what it does.
+There is currently no separate `oa_pipeline.stage1a` module. Notebook 04 uses shared `oa_pipeline.schema`, `oa_pipeline.policy`, and `oa_pipeline.common` utilities directly because Stage 1A is mostly canonicalisation, range flagging, and export orchestration.
 
 ---
 
-## The nine modules at a glance
+## Package modules at a glance
 
-Shared logic lives in modules so it can be defined once and imported
-everywhere. The original monolithic notebook redefined many of these
-helpers per-stage with subtly divergent versions — the audit identified
-that as the dominant reproducibility hazard (per Pimentel et al. 2019).
+Reusable logic lives in `src/oa_pipeline/` and is imported as `oa_pipeline.<module>`.
 
 | Module | Provides | Imported by |
-|--------|----------|-------------|
-| `oa_common.py` | Generic helpers: `die`, `utc_stamp`, `write_json`, `write_text`, `ensure_dir`, `coerce_numeric`, `coerce_datetime`, `make_missingness_table`, `write_csv_and_parquet`, `md_table_from_df`, `first_existing`, `existing_columns`, `coalesce_numeric_series`, `coalesce_string_series`, `safe_str_series`, `safe_upper`, `robust_outlier_flags`, `read_excel_sheets`, ... | **All notebooks** |
-| `oa_schema.py` | `DEFAULT_CONFIG` (canonical schema), `load_config` (JSON/YAML merge), `apply_canonical_schema`, `normalize_ph_scale`, `normalize_ta_units`, `normalize_carbonate_unit`, `choose_duplicate_keys`, `add_duplicate_flags`, `build_canonical_export`, ... | Stages 1A, 1B, 2, 3, 4 |
-| `oa_policy.py` | `RangePolicy` dataclass (**unified** — single home for sal/ta/ph/depth/lat/lon AND temp/dic/pco2/omega), `policy_from_config`, `add_stage_range_flags` | Stages 1A, 4 |
-| `oa_qc_ta_ph.py` | The QC math: TA CRM correction, pH-standard correction with TRIS / AMP / BIS Dickson SOP buffer tables, per-row status assignment, QC plot generation, markdown QC report writer | Notebook 02 only |
-| `oa_inspect.py` | Read-only output-tree inspection helpers: `list_output_files`, `filter_inventory`, `preview_csv_table`, `show_image` | Notebook 03 only |
-| `oa_stage1b.py` | Stage 1B's best-source coalescing: `STAGE1B_DEFAULTS`, `add_best_analysis_fields`, `classify_rows_sample`, `add_provenance_fields`, `validate_ta_units`, `analysis_ready_subset` | Notebook 05 only |
-| `oa_stage2.py` | Stage 2's replicate harmonisation: `STAGE2_DEFAULTS`, `materialize_canonical_aliases`, `make_column_inventory`, `add_time_and_depth_keys`, `duplicate_check`, `replicate_harmonise`, `add_conflict_annotations`, `ensure_stage2_dirs` | Notebooks 06, 07, 08 (06 for the substantive logic; 07/08 reuse the small alias / presence / inventory helpers) |
-| `oa_stage3.py` | Stage 3's carbonate-integrity checks: `STAGE3_DEFAULTS`, `CarbonateIntegrityThresholds`, `add_canonical_helper_columns`, `carbonate_integrity_checks`, `build_qc_summary` | Notebook 07 only |
-| `oa_stage4.py` | Stage 4's audit + verdict: `STAGE4_DEFAULTS`, `DicSpeciesAudit`, `coerce_and_standardize`, `missing_key_rows`, `detect_duplicates`, `run_range_checks`, `dic_species_audit`, `add_readiness_status`, `reason_count_table` | Notebook 08 only |
+|---|---|---|
+| `oa_pipeline.common` | Generic helpers for paths, JSON and CSV writing, timestamps, coercion, Excel reading, missingness tables, coalescing helpers, and robust outlier flags. | All notebooks |
+| `oa_pipeline.schema` | Canonical schema, alias resolution, config loading, unit and pH scale normalisation, duplicate key helpers, and canonical export ordering. | Stages 1A to 4 |
+| `oa_pipeline.policy` | `RangePolicy`, range configuration, and stage range flag helpers. | Stages 1A, 1B, and 4 |
+| `oa_pipeline.qc_ta_ph` | TA CRM correction, pH standard correction, QC plots, and QC markdown reports. | Notebook 02 |
+| `oa_pipeline.inspect` | Read only output tree inspection helpers. | Notebook 03 |
+| `oa_pipeline.stage1b` | Best source coalescing and sample ready filtering. | Notebook 05 |
+| `oa_pipeline.stage2` | Duplicate detection, replicate harmonisation, replicate SD checks, and conflict annotations. | Notebook 06, reused lightly by 07 and 08 |
+| `oa_pipeline.stage3` | Carbonate integrity checks: DIC species sum, pH diagnostic, scale flags, unit flags, and provenance flags. | Notebook 07 |
+| `oa_pipeline.stage4` | Final audit, range checks, strict DIC audit, PASS / REVIEW / FAIL verdicts, and reason code tables. | Notebook 08 |
 
 ---
 
-## "I want to change X — which file do I edit?"
+## Configuration
 
-| Change | Edit |
-|--------|------|
-| **Default ranges** (salinity, TA, pH, temperature, DIC, pCO₂, Ω bounds) | `oa_policy.py` `RangePolicy` defaults, *or* `oa_schema.DEFAULT_CONFIG["range_policy"]`, *or* `oa_stage4.STAGE4_DEFAULTS["range_policy"]` (Stage 4 uses *wider* "physically plausible" bounds; Stages 1A/1B use *tighter* "typical seawater" bounds). For a one-off run, set `CONFIG_PATH` instead. |
-| **Add a new column alias** (e.g. workbook has `Salinité` for `salinity`) | `oa_schema.DEFAULT_CONFIG["canonical_candidates"]["salinity"]` — append the new name. Every stage's alias map pulls from here. |
-| **Stage 1B precedence order** (which column wins when both `ta_corrected_umolkg` and `ta_umol_kg` exist) | `oa_stage1b.STAGE1B_DEFAULTS["ta_precedence"]` (or `ph_precedence`, `pco2_precedence`, `dic_precedence`). |
-| **GOA-ON SD thresholds** (replicate disagreement, default pH ± 0.02 / TA ± 10) | `oa_stage2.STAGE2_DEFAULTS["replicate_sd_thresholds"]`. Tighten to GOA-ON "climate" (~ pH ± 0.003 / TA ± 2) for cruise-grade datasets. |
-| **DIC species-sum tolerance** (Stage 3 diagnostic vs Stage 4 strict gate) | `oa_stage3.STAGE3_DEFAULTS["thresholds"]["dic_abs_tol"]` (default 10) for the diagnostic; `oa_stage4.STAGE4_DEFAULTS["dic_species_audit"]["abs_tol_umolkg"]` (default 5) for the gate. |
-| **pH diagnostic tolerance** (observed vs calculated) | `oa_stage3.STAGE3_DEFAULTS["thresholds"]["ph_diag_tol"]` (default 0.10; tighten to 0.02 for cruise-grade). |
-| **TA CRM certified value** (when you receive a new CRM batch) | `oa_qc_ta_ph.CRM_CERTIFIED_TA` — add the new batch ID and its umol/kg value. |
-| **pH-standard buffer expected values** (TRIS / AMP / BIS) | `oa_qc_ta_ph.PH_STD_TABLES` — these are from Dickson SOP and shouldn't change without a literature reason. |
-| **Sheet-naming for Notebook 02** | Pass `--sheet N` to `run_pipeline.sh` (Notebook 02 reads the indicated sheet; downstream stages see only its `derived.csv`). |
-| **What's in the analysis-ready output** | `oa_schema.DEFAULT_CONFIG["canonical_export_order"]` — controls Stage 1A's column ordering. |
-| **PASS / REVIEW / FAIL severity tiers** | `oa_stage4.add_readiness_status` — `fail_def` and `review_def` lists encode the ladder. **Edit with care:** loosening these silently promotes rows from FAIL → REVIEW or REVIEW → PASS. |
-| **Output filenames** | Each notebook's "Prepare output paths" cell. Stable names ([JWST convention](https://jwst-pipeline.readthedocs.io/): identity in folder, role in filename) — don't change them unless you also update the next stage's `INPUT_CSV` default. |
-| **Re-run from a specific stage** | `./run_pipeline.sh INPUT_XLSX OUTPUT_ROOT --start-from 06` |
+`run_pipeline.sh --config-dir configs` looks for optional per stage configuration files with these names:
 
----
-
-## How to inspect a run
-
-Every stage produces the same four kinds of output:
-
-```
-oa_<stage>_outputs/
-    data/          ← the row-level CSV (+ Parquet) that the next stage reads
-    tables/        ← per-cut summary tables (column inventory, presence, mismatches)
-    reports/       ← report.md (human-readable, includes thresholds + flag counts)
-    logs/          ← manifest.json (machine-readable provenance)
-                     effective_config.json (full config that was applied)
+```text
+configs/02_ta_ph_qc.yaml
+configs/04_stage1a.yaml
+configs/05_stage1b.yaml
+configs/06_stage2.yaml
+configs/07_stage3.yaml
+configs/08_stage4.yaml
 ```
 
-When something looks wrong:
+The same stage files can also use `.yml` or `.json` extensions.
 
-1. **Look at the manifest** of the suspect stage:
-   `outputs/oa_<stage>_outputs/logs/manifest.json` — it has the input path,
-   row counts at each step, flag counts, parquet status, and package
-   versions. Almost every "why did this stage flag/skip/fail?" question is
-   answered here.
-2. **Look at the report** for context: `outputs/oa_<stage>_outputs/reports/report.md`
-   has the thresholds in use and a summary of every flag class.
-3. **Look at the executed notebook**: `runs/<timestamp>/<stage>.run.ipynb`
-   has the full cell outputs (including any displayed dataframes) as
-   they ran.
-4. **Drill into the row-level data**: load the stage's `data/<role>.csv`
-   into pandas / a notebook and filter on the flag columns.
+If a per stage file is absent, that stage uses built in defaults and the runner prints a warning.
 
-For Stage 4 specifically — the final deliverable — the most useful entry
-points are:
+Broader reference files such as these can be used as templates or merged manually into per stage config files:
 
-- `outputs/oa_stage4_outputs/tables/range_flags_long.csv` — one row per
-  range violation, with the offending value, variable, and row IDs.
-- `outputs/oa_stage4_outputs/tables/dic_species_audit.csv` — every row's
-  computed `DIC - sum(species)` residual, the tolerance used, and the
-  three audit flags.
-- `outputs/oa_stage4_outputs/logs/manifest.json` — `status_PASS`,
-  `status_REVIEW`, `status_FAIL` counts plus a histogram of reason codes.
+```text
+configs/cruise_grade_thresholds.yaml
+configs/regional.yaml
+```
 
 ---
 
 ## Two ways to run
 
-### From the command line (recommended for full runs)
+### Full command line run
 
 ```bash
-./run_pipeline.sh INPUT_XLSX OUTPUT_ROOT [options]
+./run_pipeline.sh INPUT_XLSX OUTPUT_ROOT
 ```
 
-The runner papermills each notebook in turn, wiring each stage's input
-to the previous stage's output. See `run_pipeline.sh --help` for all
-options (sheet number, optional stages, partial re-runs, config dir,
-dry-run).
+Useful options:
 
-### From Jupyter (for interactive editing)
+```bash
+./run_pipeline.sh INPUT_XLSX OUTPUT_ROOT --dry-run
+./run_pipeline.sh INPUT_XLSX OUTPUT_ROOT --sheet 0
+./run_pipeline.sh INPUT_XLSX OUTPUT_ROOT --config-dir configs
+./run_pipeline.sh INPUT_XLSX OUTPUT_ROOT --include-viewer --include-review
+./run_pipeline.sh INPUT_XLSX OUTPUT_ROOT --start-from 06
+```
 
-Open any notebook in Jupyter Lab / VS Code, edit the **parameters cell**
-(it's tagged `parameters` — the first code cell with paths and flags),
-then `Kernel → Restart & Run All`. Each notebook has sensible defaults
-that match the canonical output paths, so if you've run an earlier stage
-its output is where the next stage expects to find it.
+Partial reruns require the earlier stage outputs to already exist inside the same `OUTPUT_ROOT`.
 
-The parameters cell is also what Papermill overrides — same notebook,
-two driving styles.
+### Interactive notebook run
+
+Open a notebook in Jupyter Lab or VS Code, edit its `parameters` cell, then use `Restart Kernel and Run All`.
+
+The notebooks are designed so the same file can be run interactively or driven by Papermill.
 
 ---
 
-## What this pipeline does NOT do
+## How to inspect a run
 
-A few intentional non-features, called out so they don't surprise you:
+Every major stage writes the same four kinds of output:
 
-- **It does not delete rows.** Every stage is additive (new columns,
-  flags, summaries) or aggregating (replicate means in a *separate*
-  table). The full row-level data with every flag preserved arrives in
-  `oa_stage4_outputs/data/analysis_ready.csv` and the analyst filters
-  there.
-- **It does not rebuild best fields after Stage 1B.** `ta_best_umolkg`,
-  `ph_best`, `ph_co2sys`, `pco2_best_uatm`, `dic_best_umol_kg` are
-  finalised by Stage 1B and carried through unchanged. Stages 2, 3, 4
-  audit them; they don't recompute them.
-- **It does not call PyCO2SYS.** The carbonate-system *calculated*
-  values (`ph_co2sys`, `omega_aragonite_calc`, etc.) are expected to be
-  already present in the input workbook (typically produced by an
-  external CO2SYS run). The pipeline's job is to validate them, not
-  produce them.
-- **It does not pick which CO2SYS solver / constants to use.** That
-  decision is recorded in `carbonate_solver` and `carbon_input_pair_used`
-  columns and surfaced by Stage 4 as `flag_solver_unknown` /
-  `flag_carbon_input_pair_unknown` if absent. The choice is the
-  analyst's, not the pipeline's.
+```text
+oa_<stage>_outputs/
+    data/       row level CSV and optional Parquet files
+    tables/     audit tables and summary tables
+    reports/    report.md
+    logs/       manifest.json and effective_config.json
+```
+
+When something looks wrong, check these in order:
+
+1. `logs/manifest.json`
+2. `reports/report.md`
+3. `runs/<timestamp>/<stage>.run.ipynb`
+4. the row level CSV in `data/`
+
+For Stage 4, the most useful files are:
+
+```text
+outputs/<run>/oa_stage4_outputs/data/analysis_ready.csv
+outputs/<run>/oa_stage4_outputs/tables/range_flags_long.csv
+outputs/<run>/oa_stage4_outputs/tables/dic_species_audit.csv
+outputs/<run>/oa_stage4_outputs/logs/manifest.json
+```
+
+---
+
+## What this pipeline does not do
+
+### It does not delete rows
+
+Every stage is additive. It adds columns, flags, summaries, and reports. The analyst decides whether to filter PASS only, include REVIEW rows, or inspect FAIL rows.
+
+### It does not rebuild best fields after Stage 1B
+
+Fields such as `ta_best_umolkg`, `ph_best`, `ph_co2sys`, `pco2_best_uatm`, and `dic_best_umol_kg` are finalised by Stage 1B and carried through later stages. Stages 2, 3, and 4 audit them, but do not recompute them.
+
+### It does not run PyCO2SYS internally
+
+Calculated carbonate fields such as `ph_co2sys`, `pco2_best_uatm`, `dic_best_umol_kg`, and carbonate species columns are expected to already be present in the input workbook or generated upstream.
+
+The pipeline audits those fields and requires provenance columns such as:
+
+```text
+carbonate_solver
+carbon_input_pair_used
+```
+
+when calculated carbonate outputs are present.
+
+### It does not choose carbonate constants for the analyst
+
+Solver choice and constants should be documented upstream. The pipeline records and audits that provenance, but does not decide it.
+
+---
 
 ## Testing
 
-A small pytest suite under `tests/` covers the load-bearing functions
-plus the full pipeline end-to-end on the bundled example dataset.
+Run the test suite using the same Python interpreter where the package was installed:
 
 ```bash
-pip install -e ".[dev]"
-pytest                                # 57 tests, ~15s
-pytest tests/test_coalesce.py -v      # just the unit tests on one file
-pytest tests/test_pipeline_e2e.py     # just the integration test
+python -m pytest -q
 ```
 
-| File | What it covers |
-|------|----------------|
-| `tests/test_coalesce.py` | Stage 1B's best-source picker (`coalesce_numeric_series`, `coalesce_string_series`) including the per-row source-tracking, NA handling, and string-vs-numeric coercion. |
-| `tests/test_schema.py` | Canonical alias resolution, the duplicate-key chooser (with a regression test for the all-NA-tuples bug we caught), and the pH-scale / unit normalisers (including a regression for the silent UPPERCASE-vs-lowercase divergence between Stage 3 and Stages 1A/1B). |
-| `tests/test_readiness.py` | Stage 4's PASS/REVIEW/FAIL classifier — every reason code, the FAIL-beats-REVIEW precedence, and the `range_flag_count`-absent regression. |
-| `tests/test_pipeline_e2e.py` | Runs the full eight-notebook chain on `examples/example_data.xlsx` via papermill and asserts the verdict distribution, the four broken rows produce their expected reason codes, and every stage writes its manifest. |
+The suite includes unit tests for schema resolution, coalescing, readiness classification, and a full Papermill end to end test over the bundled example workbook.
 
-The end-to-end test is skipped if `papermill` is not installed. The unit
-tests run without it.
+At the latest stable checkpoint, the test suite reported:
 
----
+```text
+108 passed
+```
 
-### Carbonate-system science
+Use these targeted commands while debugging:
 
-- **Dickson, A. G., Sabine, C. L., Christian, J. R. (Eds.) (2007),
-  *Guide to Best Practices for Ocean CO₂ Measurements***. PICES Special
-  Publication 3. The source of the TRIS / AMP / BIS buffer-value tables
-  and the CRM correction protocol in Notebook 02.
-- **DOE (1994), *Handbook of Methods for the Analysis of the Various
-  Parameters of the Carbon Dioxide System in Sea Water***, SOP 23. The
-  "use the SD of replicate measurements as the precision estimate"
-  approach used by Stage 2.
-- **Newton, J. A. et al. (2015), *GOA-ON Requirements and Governance
-  Plan***. Source of the "weather" (pH ± 0.02 / TA ± 10 µmol/kg) and
-  "climate" (~ pH ± 0.003 / TA ± 2 µmol/kg) precision objectives that
-  underpin Stage 2's SD thresholds and Stage 3/4's tolerances.
-- **Millero, F. J. (1993)**, *Mar. Chem.* **44**, 269–280. The
-  internal-consistency framework Stage 3 implements row-by-row.
-- **OCADS NDP-090 — Total Alkalinity Measurements**. Real-world example
-  of `max(abs_tol, rel_tol * |DIC|)` as the integrity threshold.
-- **Iglewicz, B., Hoaglin, D. C. (1993)**. The MAD-based robust-outlier
-  rule used by Stage 2's `replicate_outlier_flags` and Stage 3's robust
-  DIC and pH variants.
+```bash
+python -m pytest tests/test_coalesce.py -q
+python -m pytest tests/test_schema.py -q
+python -m pytest tests/test_readiness.py -q
+python -m pytest tests/test_pipeline_e2e.py -q
+```
 
-### Data engineering
-
-- **Apache Avro Specification — *Schema Resolution and Aliases***. The
-  reason `canonical_candidates` is modelled as `name -> [aliases]`.
-- **PySpark `coalesce` function documentation**. The
-  COALESCE-with-row-level-provenance pattern Stage 1B implements via
-  `coalesce_numeric_series` / `coalesce_string_series`.
-- **Coalesce.io, *What is Data Lineage?***. Motivates the per-row
-  `*_source` columns that record which column won each best-source pick.
-- **JWST input/output conventions**. Source of "use `output_dir` to
-  place results in a different directory instead of using `output_file`
-  to rename" — why output filenames are short and `OUT_DIR` is flat.
-- **Palantir Foundry, *Building pipelines***. Descriptive names,
-  distinctive part first.
-- **NDepend, *Quality Gates*** and **UN/ABS *Data Quality Manual
-  Part B***. The PASS / WARN / FAIL three-tier verdict pattern Stage 4
-  implements (with REVIEW substituted for WARN).
-
-### Software engineering
-
-- **Rule, A. et al. (2019)**, *Ten Simple Rules for Reproducible
-  Research in Jupyter Notebooks*, arXiv:1810.08055. The structural
-  rules followed by the refactor: modularize (R4), parameterize (R5),
-  record provenance (R8).
-- **Pimentel, J. F. et al. (2019)**, *A Large-Scale Study about Quality
-  and Reproducibility of Jupyter Notebooks*. The empirical evidence
-  that per-notebook helper redefinition is the dominant reproducibility
-  hazard.
-- **Papermill** (nteract). The `parameters`-tagged cell convention and
-  the runner script that drives the pipeline.
-- **Ian Rose, *Working with Jupyter notebooks***. Restart-and-run-all
-  as the unit of reproducibility.
-- **Russ Poldrack, *Better Code, Better Science***. Same.
+The end to end test is skipped if Papermill is not installed. The unit tests do not require Papermill.
 
 ---
 
-## Audit history
+## Bundled example dataset
 
-The original monolithic notebook had eight major issues that this
-refactor addresses structurally. They are described in the per-stage
-READMEs (each has a §6 "What changed vs. the original" table). In
-summary:
+The bundled example dataset is generated by:
 
-1. **Six input-path bugs** across Stages 1A / 1B / 2 / 3 / 4 — each
-   stage's hardcoded `input_csv` pointed at a filename the previous
-   stage never produced.
-2. **`RangePolicy` redefined three times** with *different fields* in
-   Stages 1A, 1B, and 4 — a silent-overwrite bug when run in one
-   kernel. Fixed by unifying in `oa_policy.py`.
-3. **`write_report` defined three times** with different signatures in
-   Stages 2, 3, 4 — name collision. Fixed by inlining the per-stage
-   markdown in each notebook.
-4. **Filename-stem accumulation**:
-   `oa_prelim_data__0__derived__stage1a_staged__analysis_ready_samples__stage2_enhanced__stage3_enhanced__analysis_ready_stage4.csv`
-   over six stages. Fixed by short role-based filenames + identity-in-folder.
-5. **The duplicate-key NA bug in Stage 1A**: `choose_duplicate_keys`
-   originally checked only "column exists in df", but
-   `apply_canonical_schema` creates every canonical column (NA-filled
-   if no alias resolved), so the existence test was trivially true and
-   every row got flagged. Fixed: require "column exists AND has at
-   least one non-NA value".
-6. **The `fix_lattitude` flag** in Stage 1A — redundant with the
-   alias list and ordered wrong. Removed.
-7. **Case-divergence in pH scale strings**: Stage 3's
-   `normalize_scale_text` produced uppercase, Stages 1A/1B's
-   `normalize_ph_scale` produced lowercase. If joined, the values
-   wouldn't match. Fixed: one normaliser, lowercase, in `oa_schema.py`.
-8. **`range_flag_count` AttributeError in Stage 4**: the original's
-   `pd.to_numeric(df.get("range_flag_count"), ...).fillna(0)` crashed
-   when the column was absent. Discovered during smoke-test; fixed
-   with a guarded conditional.
+```bash
+python examples/make_example_data.py
+```
 
-Plus dozens of duplicated helpers (`die`, `utc_stamp`, `coerce_numeric`,
-`robust_outlier_flags`, ...) — these are now all in `oa_common.py`,
-defined once, imported everywhere.
+It creates:
+
+```text
+examples/example_data.xlsx
+```
+
+with 27 rows:
+
+```text
+20 sample rows
+4 CRM rows
+3 TRIS pH standard rows
+```
+
+The sample sheet is named:
+
+```text
+oa_data
+```
+
+The example has four deliberately injected sample row issues with known expected Stage 4 outcomes:
+
+| Row | Injected issue | Expected status | Expected reason code |
+|---|---|---|---|
+| S005 | salinity = 50, above `sal_max = 42` | REVIEW | `range_flag` |
+| S007 | missing `sample_id` | FAIL | `missing_key` |
+| S010 | DIC species sum broken by 200 µmol/kg | FAIL | `strict_dic_species_fail` |
+| S015 | negative HCO3, physically impossible | FAIL | `strict_dic_species_fail` |
+
+The integration test asserts that these rows produce the expected status and reason code.
+
+---
+
+## Common edit targets
+
+| Change | Edit |
+|---|---|
+| Add a workbook column alias | `oa_pipeline.schema.DEFAULT_CONFIG["canonical_candidates"]` |
+| Change Stage 1B best source precedence | `oa_pipeline.stage1b.STAGE1B_DEFAULTS` |
+| Change replicate SD thresholds | `oa_pipeline.stage2.STAGE2_DEFAULTS` |
+| Change Stage 3 DIC or pH diagnostic tolerance | `oa_pipeline.stage3.STAGE3_DEFAULTS["thresholds"]` |
+| Change Stage 4 strict DIC audit tolerance | `oa_pipeline.stage4.STAGE4_DEFAULTS["dic_species_audit"]` |
+| Change Stage 4 PASS / REVIEW / FAIL severity | `oa_pipeline.stage4.add_readiness_status` |
+| Add a new CRM certified TA value | `oa_pipeline.qc_ta_ph.CRM_CERTIFIED_TA` |
+| Change output wiring | `run_pipeline.sh` and the relevant notebook parameters cell |
 
 ---
 
 ## Status
 
-**57 tests pass** in ~15 seconds: 47 unit tests on the load-bearing
-functions (`coalesce_numeric_series`, `apply_canonical_schema`,
-`choose_duplicate_keys`, `add_readiness_status`, the normalisers) and
-10 integration tests that drive the full eight-notebook chain on the
-bundled example dataset and assert the verdict distribution.
+The current package layout is:
 
-The example dataset has four deliberately-broken rows with known
-expected verdicts:
+```text
+src/oa_pipeline/
+notebooks/
+tests/
+examples/
+configs/
+outputs/
+runs/
+```
 
-| Row | Injected issue | Expected reason code |
-|------|----------------|---------------------|
-| S005 | salinity = 50 (above sal_max = 42) | `range_flag` |
-| S007 | dropped `sample_id` | `missing_key` |
-| S010 | DIC species sum off by 200 µmol/kg | `strict_dic_species_fail` |
-| S015 | negative HCO₃ (physically impossible) | `strict_dic_species_fail` |
+The pipeline has a deterministic example workbook, unit tests for load bearing functions, and an end to end Papermill test that verifies the full notebook chain.
 
-The integration test asserts each of these four rows produces its
-expected reason code and is not classified as PASS.
-
-For a real dataset, the first thing to check is the per-stage `manifest.json`
-files — they're machine-readable and record everything that was applied.
+For a real dataset, the first files to inspect are the per stage `manifest.json` files. They record the input path, row counts, flag counts, config source, package versions, and output paths used for the run.
