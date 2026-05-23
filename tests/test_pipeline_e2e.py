@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +33,12 @@ pytest.importorskip("papermill")
 
 
 def _find_git_bash() -> str | None:
-    """Prefer Git Bash over WSL bash on Windows."""
+    """Prefer Git Bash over WSL bash on Windows.
+
+    On Windows, a generic PATH lookup can find WSL bash. WSL bash can mangle
+    Windows style paths used by this test, so Windows requires Git Bash.
+    Non Windows platforms can use bash from PATH.
+    """
     candidates = [
         Path(os.environ.get("ProgramFiles", "")) / "Git" / "bin" / "bash.exe",
         Path(os.environ.get("ProgramFiles", "")) / "Git" / "usr" / "bin" / "bash.exe",
@@ -43,6 +49,9 @@ def _find_git_bash() -> str | None:
     for candidate in candidates:
         if candidate.exists():
             return str(candidate)
+
+    if os.name == "nt":
+        return None
 
     return shutil.which("bash")
 
@@ -125,6 +134,12 @@ def _id_column(df: pd.DataFrame) -> str:
     return "record_id"
 
 
+def _count_true(series: pd.Series) -> int:
+    """Count true values after CSV round trips through strings or booleans."""
+    text = series.astype("string").str.strip().str.upper()
+    return int(text.isin(["TRUE", "T", "YES", "Y", "1"]).sum())
+
+
 # =============================================================================
 # Pipeline execution fixture
 # =============================================================================
@@ -163,10 +178,8 @@ def pipeline_outputs(
 
     out_root = _make_test_output_root(project_root, tmp_path_factory)
 
-    input_arg = _path_arg(example_xlsx_path, project_root)
-    output_arg = _path_arg(out_root, project_root)
-
     env = os.environ.copy()
+    env["PYTHON_BIN"] = sys.executable
 
     venv_scripts = project_root / ".venv" / "Scripts"
     if venv_scripts.exists():
@@ -181,6 +194,37 @@ def pipeline_outputs(
         + os.pathsep
         + env.get("PYTHONPATH", "")
     )
+
+    generated_input_dir = out_root / "_input"
+    generated_input_dir.mkdir(parents=True, exist_ok=True)
+    generated_example = generated_input_dir / "example_data.xlsx"
+
+    generator = project_root / "examples" / "make_example_data.py"
+    assert generator.exists(), f"Missing example data generator: {generator}"
+
+    gen_result = subprocess.run(
+        [
+            sys.executable,
+            str(generator),
+            "--out",
+            str(generated_example),
+        ],
+        cwd=project_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if gen_result.returncode != 0:
+        pytest.fail(
+            f"Example data generator failed with code {gen_result.returncode}\n"
+            f"--- stdout last 2000 chars ---\n{gen_result.stdout[-2000:]}\n"
+            f"--- stderr last 2000 chars ---\n{gen_result.stderr[-2000:]}"
+        )
+
+    input_arg = _path_arg(generated_example, project_root)
+    output_arg = _path_arg(out_root, project_root)
 
     result = subprocess.run(
         [
@@ -220,6 +264,10 @@ def test_runner_references_notebooks_dir(project_root: Path) -> None:
 
     assert "NOTEBOOK_DIR" in text
     assert 'NOTEBOOK_DIR="$SCRIPT_DIR/notebooks"' in text
+    assert "PYTHON_BIN" in text
+    assert 'PYTHON_BIN="${PYTHON_BIN:-python}"' in text
+    assert "resolve_qc_sheet_folder" in text
+    assert "analysis_ready.csv" in text
 
     expected_notebook_names = [
         "02_ta_ph_qc.ipynb",
@@ -232,6 +280,62 @@ def test_runner_references_notebooks_dir(project_root: Path) -> None:
 
     missing = [name for name in expected_notebook_names if name not in text]
     assert not missing, f"run_pipeline.sh does not reference notebooks: {missing}"
+
+
+def test_runner_dry_run_succeeds(
+    project_root: Path,
+    example_xlsx_path: Path,
+    tmp_path: Path,
+) -> None:
+    """The runner should parse arguments and print commands in dry run mode."""
+    runner = project_root / "run_pipeline.sh"
+    assert runner.exists(), f"Missing runner: {runner}"
+
+    if not example_xlsx_path.exists():
+        pytest.skip(
+            f"{example_xlsx_path} not present. Run "
+            "`python examples/make_example_data.py` to regenerate it."
+        )
+
+    bash_exe = _find_git_bash()
+    if bash_exe is None:
+        pytest.skip("bash not found")
+
+    env = os.environ.copy()
+    env["PYTHON_BIN"] = sys.executable
+
+    src_path = project_root / "src"
+    env["PYTHONPATH"] = (
+        str(src_path)
+        + os.pathsep
+        + str(project_root)
+        + os.pathsep
+        + env.get("PYTHONPATH", "")
+    )
+
+    result = subprocess.run(
+        [
+            bash_exe,
+            "./run_pipeline.sh",
+            _path_arg(example_xlsx_path, project_root),
+            _path_arg(tmp_path / "dry_run_outputs", project_root),
+            "--dry-run",
+        ],
+        cwd=project_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        f"Dry run failed with code {result.returncode}\n"
+        f"--- stdout last 2000 chars ---\n{result.stdout[-2000:]}\n"
+        f"--- stderr last 2000 chars ---\n{result.stderr[-2000:]}"
+    )
+    assert "Dry run complete" in result.stdout
+    assert "02_ta_ph_qc.ipynb" in result.stdout
+    assert "08_stage4.ipynb" in result.stdout
 
 
 # =============================================================================
@@ -315,6 +419,15 @@ def test_data_folders_do_not_contain_notebooks(pipeline_outputs: Path) -> None:
     assert not bad_paths, f"Notebook unexpectedly written to data folder: {bad_paths}"
 
 
+def test_project_runs_directory_contains_executed_notebooks(project_root: Path) -> None:
+    """At least one Papermill run notebook should be written under project runs/."""
+    runs_root = project_root / "runs"
+    assert runs_root.exists(), f"Missing runs directory: {runs_root}"
+
+    run_notebooks = list(runs_root.glob("*/*.run.ipynb"))
+    assert run_notebooks, "No executed Papermill notebooks found under runs/"
+
+
 # =============================================================================
 # Final output schema
 # =============================================================================
@@ -382,6 +495,29 @@ def test_verdict_distribution_matches_injected_issues(pipeline_outputs: Path) ->
         f"{n_non_pass}. Distribution: {counts.to_dict()}"
     )
     assert set(counts.index) <= {"PASS", "REVIEW", "FAIL"}
+
+
+def test_final_output_does_not_globally_fail_for_missing_carbonate_provenance(
+    pipeline_outputs: Path,
+) -> None:
+    """Regression: avoid the old global FAIL problem from missing provenance."""
+    analysis_ready = _load_final(pipeline_outputs)
+
+    required = ["flag_solver_unknown", "flag_carbon_input_pair_unknown"]
+    missing = [col for col in required if col not in analysis_ready.columns]
+    assert not missing, f"Missing provenance audit columns: {missing}"
+
+    n_solver_unknown = _count_true(analysis_ready["flag_solver_unknown"])
+    n_pair_unknown = _count_true(analysis_ready["flag_carbon_input_pair_unknown"])
+
+    assert n_solver_unknown < len(analysis_ready), (
+        "All rows have unknown solver provenance, which recreates the old "
+        "global FAIL problem."
+    )
+    assert n_pair_unknown < len(analysis_ready), (
+        "All rows have unknown carbon input pair provenance, which recreates "
+        "the old global FAIL problem."
+    )
 
 
 # =============================================================================

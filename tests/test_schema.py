@@ -6,6 +6,11 @@ Tests for oa_pipeline.schema.
 These tests cover canonical alias resolution, row wise alias coalescing,
 duplicate key selection, duplicate flags, schema config loading, and unit or
 scale normalisation.
+
+The carbonate unit tests intentionally expect all equivalent concentration unit
+spellings to normalise to one canonical value: "umol kg-1". This protects Stage
+3 and Stage 4 from false DIC unit mismatch flags when equivalent units are
+written with different symbols or spacing.
 """
 
 from __future__ import annotations
@@ -72,6 +77,17 @@ class TestApplyCanonicalSchema:
         assert out.loc[0, "Salinity"] == 35.0
         assert out.loc[0, "salinity"] == 35.0
 
+    def test_apply_canonical_schema_does_not_mutate_input(self) -> None:
+        """Schema application should not modify the caller's original dataframe."""
+        df = pd.DataFrame({"sample_tag": ["S1"], "Salinity": [35.0]})
+        original_cols = list(df.columns)
+
+        out, _, _ = apply_canonical_schema(df, DEFAULT_CONFIG)
+
+        assert list(df.columns) == original_cols
+        assert "salinity" not in df.columns
+        assert "salinity" in out.columns
+
     def test_empty_canonical_column_is_filled_from_better_alias(self) -> None:
         """Regression: empty canonical columns must not block useful aliases."""
         df = pd.DataFrame(
@@ -89,6 +105,21 @@ class TestApplyCanonicalSchema:
         assert out["ph_observed"].tolist() == [8.01, 8.02]
         assert "ta_corrected_umolkg" in lookup.get("ta_umol_kg", "")
         assert "ph_corrected_from_phstd" in lookup.get("ph_observed", "")
+
+    def test_apply_canonical_schema_coalesces_aliases_row_wise(self) -> None:
+        """Different rows may take values from different aliases."""
+        df = pd.DataFrame(
+            {
+                "ta_umol_kg": [2300.0, pd.NA],
+                "ta_corrected_umolkg": [pd.NA, 2310.0],
+            }
+        )
+
+        out, _, lookup = apply_canonical_schema(df, DEFAULT_CONFIG)
+
+        assert out["ta_umol_kg"].tolist() == [2300.0, 2310.0]
+        assert "ta_umol_kg" in lookup.get("ta_umol_kg", "")
+        assert "ta_corrected_umolkg" in lookup.get("ta_umol_kg", "")
 
     def test_apply_canonical_schema_rejects_ambiguous_aliases(self) -> None:
         """Ambiguous aliases should fail rather than silently picking one pH field."""
@@ -187,6 +218,25 @@ class TestDuplicateKeys:
             False,
         ]
 
+    def test_add_duplicate_flags_treats_blank_strings_as_incomplete_keys(self) -> None:
+        """Blank strings in duplicate keys should be incomplete, not duplicates."""
+        df = pd.DataFrame(
+            {
+                "sample_id": ["", " ", "S3"],
+                "sample_date": ["2024-01-01", "2024-01-01", "2024-01-01"],
+            }
+        )
+
+        n_flagged = add_duplicate_flags(df, ["sample_id", "sample_date"])
+
+        assert n_flagged == 0
+        assert not df["flag_possible_duplicate"].fillna(False).any()
+        assert df["flag_duplicate_key_incomplete"].fillna(False).tolist() == [
+            True,
+            True,
+            False,
+        ]
+
 
 # =============================================================================
 # Config loading
@@ -197,6 +247,23 @@ class TestSchemaConfigLoading:
     def test_load_schema_config_none_returns_defaults(self) -> None:
         """None config returns defaults and no resolved path."""
         cfg, resolved = load_schema_config(None)
+
+        assert resolved is None
+        assert "canonical_candidates" in cfg
+        assert cfg["canonical_candidates"]
+
+    def test_load_schema_config_string_none_returns_defaults(self) -> None:
+        """String None from Papermill should behave like no config path."""
+        cfg, resolved = load_schema_config("None")
+
+        assert resolved is None
+        assert "canonical_candidates" in cfg
+        assert cfg["canonical_candidates"]
+
+    @pytest.mark.parametrize("value", ["", "none", "None", "NONE", "null", "NULL"])
+    def test_load_schema_config_empty_like_strings_return_defaults(self, value) -> None:
+        """Papermill style empty config strings should not be treated as paths."""
+        cfg, resolved = load_schema_config(value)
 
         assert resolved is None
         assert "canonical_candidates" in cfg
@@ -315,13 +382,21 @@ class TestNormalizers:
     @pytest.mark.parametrize(
         "input_val, expected",
         [
-            ("\u00b5mol/kg", "UMOL/KG"),
-            ("\u03bcmol/kg", "UMOL/KG"),
-            ("\u039cMOL/KG", "UMOL/KG"),
-            ("umol kg-1", "UMOLKG-1"),
-            ("umol kg\u22121", "UMOLKG-1"),
-            ("umol kg\u207b\u00b9", "UMOLKG-1"),
-            (" \u00b5mol / kg ", "UMOL/KG"),
+            ("umol/kg", "umol kg-1"),
+            ("UMOL/KG", "umol kg-1"),
+            ("UMOLKG", "umol kg-1"),
+            ("UMOLKG-1", "umol kg-1"),
+            ("UMOLKG^-1", "umol kg-1"),
+            ("UMOL/KG-1", "umol kg-1"),
+            ("MICROMOL/KG", "umol kg-1"),
+            ("MICROMOLKG", "umol kg-1"),
+            ("\u00b5mol/kg", "umol kg-1"),
+            ("\u03bcmol/kg", "umol kg-1"),
+            ("\u039cMOL/KG", "umol kg-1"),
+            ("umol kg-1", "umol kg-1"),
+            ("umol kg\u22121", "umol kg-1"),
+            ("umol kg\u207b\u00b9", "umol kg-1"),
+            (" \u00b5mol / kg ", "umol kg-1"),
         ],
     )
     def test_normalize_carbonate_unit_variants(
@@ -329,8 +404,12 @@ class TestNormalizers:
         input_val,
         expected,
     ) -> None:
-        """Carbonate species units handle micro, spacing, and minus variants."""
+        """Equivalent carbonate species units normalise to one canonical form."""
         assert normalize_carbonate_unit(input_val) == expected
+
+    def test_normalize_carbonate_unit_unknown_value_passes_through(self) -> None:
+        """Unknown carbonate species units are preserved for review."""
+        assert normalize_carbonate_unit("mmol/m3") == "mmol/m3"
 
     def test_normalize_carbonate_unit_na_returns_na(self) -> None:
         """Missing carbonate species unit values remain missing."""

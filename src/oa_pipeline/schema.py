@@ -131,6 +131,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "longitude_deg": ["longitude_deg", "longitude", "lon", "long"],
         "ta_umol_kg": [
             "ta_umol_kg",
+            "ta_umolkg",
             "ta_corrected_umolkg",
             "ta_corrected",
             "ta",
@@ -146,11 +147,40 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             "ph",
         ],
         "ph_calculated": ["ph_calculated", "pH_calc", "ph_calc"],
-        "dic_calculated_umol_kg": ["dic_calculated_umol_kg", "dic_calc"],
-        "pco2_calc_uatm": ["pco2_calc_uatm", "pco2"],
-        "co2aq_calc_umol_kg": ["co2aq_calc_umol_kg", "co2"],
-        "hco3_calc_umol_kg": ["hco3_calc_umol_kg", "hco3-"],
-        "co3_calc_umol_kg": ["co3_calc_umol_kg", "co3-"],
+        "dic_calculated_umol_kg": [
+            "dic_calculated_umol_kg",
+            "dic_measured_umol_kg",
+            "dic_umol_kg",
+            "dic_umolkg",
+            "dic_calc",
+            "DIC",
+            "dic",
+        ],
+        "pco2_calc_uatm": [
+            "pco2_calc_uatm",
+            "pco2_uatm",
+            "pCO2",
+            "pco2",
+        ],
+        "co2aq_calc_umol_kg": [
+            "co2aq_calc_umol_kg",
+            "co2aq_umol_kg",
+            "co2aq_umolkg",
+            "co2_aq_umol_kg",
+            "aqueous_co2_umol_kg",
+        ],
+        "hco3_calc_umol_kg": [
+            "hco3_calc_umol_kg",
+            "hco3_umol_kg",
+            "hco3_umolkg",
+            "bicarbonate_umol_kg",
+        ],
+        "co3_calc_umol_kg": [
+            "co3_calc_umol_kg",
+            "co3_umol_kg",
+            "co3_umolkg",
+            "carbonate_umol_kg",
+        ],
         "omega_calcite_calc": ["omega_calcite_calc", "omega_ca"],
         "omega_aragonite_calc": ["omega_aragonite_calc", "omega_ar"],
         "revelle_factor_calc": ["revelle_factor_calc", "revelle_factor"],
@@ -341,7 +371,7 @@ def load_schema_config(config_path: Optional[str]) -> Tuple[Dict[str, Any], Opti
     Returns:
         (merged_config, resolved_path_or_None)
     """
-    if config_path is None or str(config_path).strip().lower() in {"", "none"}:
+    if config_path is None or str(config_path).strip().lower() in {"", "none", "null"}:
         return deepcopy(DEFAULT_CONFIG), None
 
     path = Path(str(config_path)).expanduser().resolve()
@@ -443,12 +473,19 @@ def normalize_ph_scale(value: Any) -> Any:
 
 
 def normalize_carbonate_unit(value: Any) -> Any:
-    """Normalise carbonate species unit text for reliable comparison."""
+    """Canonicalise carbonate species concentration units.
+
+    Equivalent micromol per kg spellings are normalised to "umol kg-1" so
+    DIC/species unit comparisons do not falsely fail because of micro symbols,
+    spacing, slash notation, or minus sign variants.
+    """
     if pd.isna(value):
         return pd.NA
 
+    original = str(value).strip()
+
     text = (
-        str(value).strip()
+        original
         .replace("\u00b5", "U")
         .replace("\u03bc", "U")
         .replace("\u039c", "U")
@@ -457,11 +494,36 @@ def normalize_carbonate_unit(value: Any) -> Any:
         .replace("—", "-")
         .replace("⁻", "-")
         .replace("¹", "1")
-        .upper()
-        .replace(" ", "")
     )
 
-    return text if text else pd.NA
+    key = (
+        text.upper()
+        .replace("MICROMOL", "UMOL")
+        .replace("MICRO MOL", "UMOL")
+        .replace(" ", "")
+        .replace("_", "")
+        .replace(".", "")
+    )
+
+    key = key.replace("KGSW", "KG")
+    key = key.replace("KG-SW", "KG")
+    key = key.replace("KG-SEAWATER", "KG")
+    key = key.replace("/KGSEAWATER", "/KG")
+
+    accepted = {
+        "UMOL/KG",
+        "UMOLKG",
+        "UMOLKG-1",
+        "UMOLKG^-1",
+        "UMOL/KG-1",
+        "UMOL/KGSEAWATER",
+        "UMOLKGSEAWATER",
+    }
+
+    if key in accepted:
+        return "umol kg-1"
+
+    return original if original else pd.NA
 
 
 # =============================================================================
@@ -608,7 +670,11 @@ def build_canonical_action_map(
     config: Dict[str, Any],
     preserve_original_columns: bool = True,
 ) -> Tuple[List[Dict[str, str]], Dict[str, str]]:
-    """Build an audit map describing how canonical columns will be sourced."""
+    """Build an audit map describing how canonical columns will be sourced.
+
+    Original columns are currently always preserved. The preserve_original_columns
+    argument is retained for backward compatible call signatures.
+    """
     del preserve_original_columns
 
     actions: List[Dict[str, str]] = []
@@ -626,12 +692,21 @@ def build_canonical_action_map(
         non_missing_sources = best_source.dropna()
         unique_sources = sorted(set(str(x) for x in non_missing_sources))
 
-        source_lookup[canonical] = ";".join(unique_sources)
+        source_text = ";".join(unique_sources)
+        action = (
+            "created_missing"
+            if len(unique_sources) == 0
+            else "coalesced"
+            if len(unique_sources) > 1
+            else "copied"
+        )
+
+        source_lookup[canonical] = source_text
         actions.append(
             {
                 "canonical_column": canonical,
-                "source_column": ";".join(unique_sources),
-                "action": "coalesced" if len(unique_sources) > 1 else "copied",
+                "source_column": source_text,
+                "action": action,
             }
         )
 
@@ -644,6 +719,9 @@ def apply_canonical_schema(
     preserve_original_columns: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, Dict[str, str]]:
     """Resolve aliases, normalise units and scales, and add provenance columns.
+
+    Original columns are currently always preserved. The preserve_original_columns
+    argument is retained for backward compatible call signatures.
 
     Returns:
         (new_df, audit_df, source_lookup)
@@ -669,12 +747,20 @@ def apply_canonical_schema(
         unique_sources = sorted(set(str(x) for x in non_missing_sources))
         source_text = ";".join(unique_sources)
 
+        action = (
+            "created_missing"
+            if len(unique_sources) == 0
+            else "coalesced"
+            if len(unique_sources) > 1
+            else "copied"
+        )
+
         source_lookup[canonical] = source_text
         actions.append(
             {
                 "canonical_column": canonical,
                 "source_column": source_text,
-                "action": "coalesced" if len(unique_sources) > 1 else "copied",
+                "action": action,
                 "n_source_columns": str(len(unique_sources)),
             }
         )
@@ -805,7 +891,15 @@ def add_canonical_presence_flags(df: pd.DataFrame, config: Dict[str, Any]) -> No
         df["flag_ta_units_missing"] = pd.Series(True, index=df.index, dtype="boolean")
         df["flag_ta_units_unexpected"] = pd.Series(pd.NA, index=df.index, dtype="boolean")
 
-    accepted_ph_scales = set(config.get("accepted_ph_scales", ["total"]))
+    accepted_ph_scales = {
+        normalize_ph_scale(x)
+        for x in config.get("accepted_ph_scales", ["total"])
+    }
+    accepted_ph_scales = {
+        x
+        for x in accepted_ph_scales
+        if pd.notna(x) and str(x).strip() != ""
+    }
 
     if "ph_scale_observed" in df.columns:
         df["flag_ph_scale_observed_missing"] = (
@@ -890,16 +984,33 @@ def choose_duplicate_keys(
     config: Dict[str, Any],
     override_keys: Optional[List[str]] = None,
 ) -> List[str]:
-    """Pick a duplicate key tuple from config or override_keys."""
+    """Pick a duplicate key tuple from config or override_keys.
+
+    A candidate key set is usable only if all columns exist and at least one row
+    has a complete non blank key across the full tuple. This prevents selecting
+    weak key sets where each column has some data somewhere but no row has all
+    key values together.
+    """
     if override_keys:
-        return [k for k in override_keys if k in df.columns]
+        keys = [k for k in override_keys if k in df.columns]
+        if not keys:
+            return []
+
+        complete = pd.Series(True, index=df.index)
+        for key in keys:
+            complete &= _series_has_value(df[key])
+
+        return keys if complete.any() else []
 
     for candidate_set in config.get("duplicate_key_candidates", []):
-        usable = all(
-            (c in df.columns) and _series_has_value(df[c]).any()
-            for c in candidate_set
-        )
-        if usable:
+        if not all(c in df.columns for c in candidate_set):
+            continue
+
+        complete = pd.Series(True, index=df.index)
+        for col in candidate_set:
+            complete &= _series_has_value(df[col])
+
+        if complete.any():
             return list(candidate_set)
 
     return []
@@ -916,13 +1027,18 @@ def add_duplicate_flags(df: pd.DataFrame, dup_keys: List[str]) -> int:
     if missing:
         die(f"Duplicate key columns are missing: {missing}")
 
-    complete_key = df[dup_keys].notna().all(axis=1)
+    complete_key = pd.Series(True, index=df.index)
+
+    for key in dup_keys:
+        complete_key &= _series_has_value(df[key])
+
     dup_mask = pd.Series(False, index=df.index)
 
-    dup_mask.loc[complete_key] = df.loc[complete_key].duplicated(
-        subset=dup_keys,
-        keep=False,
-    )
+    if complete_key.any():
+        dup_mask.loc[complete_key] = df.loc[complete_key].duplicated(
+            subset=dup_keys,
+            keep=False,
+        )
 
     df["flag_possible_duplicate"] = dup_mask.astype("boolean")
     df["flag_duplicate_key_incomplete"] = (~complete_key).astype("boolean")

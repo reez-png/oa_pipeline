@@ -15,9 +15,11 @@ more reproducible, easier to test, and easier to maintain.
 from __future__ import annotations
 
 import json
+import math
 import re
 import sys
 from collections.abc import Mapping
+from copy import deepcopy
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
@@ -32,6 +34,7 @@ __all__ = [
     "normalize_columns",
     "resolve_col",
     "safe_str_series",
+    "has_value_series",
     "safe_sheet_name",
     "fmt",
     "read_excel_sheets",
@@ -99,6 +102,7 @@ def canonical_colname(value: object) -> str:
 def normalize_columns(
     df: pd.DataFrame,
     fail_on_duplicates: bool = True,
+    fail_on_canonical_duplicates: bool = False,
 ) -> pd.DataFrame:
     """Strip whitespace from column labels and optionally reject duplicates.
 
@@ -106,6 +110,10 @@ def normalize_columns(
     those spaces is useful, but it can create duplicate names such as "TA" and
     "TA ". In a scientific pipeline, duplicated chemistry fields should fail
     loudly instead of being allowed to pass into downstream calculations.
+
+    When fail_on_canonical_duplicates is True, columns that collapse to the same
+    alphanumeric canonical key are also rejected. This stricter mode can catch
+    ambiguous pairs such as "TA", "ta", and "T A" during input loading.
     """
     out = df.copy()
     cleaned = [str(c).strip() for c in out.columns]
@@ -121,6 +129,26 @@ def normalize_columns(
                 "Duplicate column names after whitespace cleanup: "
                 + ", ".join(duplicates)
             )
+
+    if fail_on_canonical_duplicates:
+        canon_map: dict[str, list[str]] = {}
+
+        for col in cleaned:
+            key = canonical_colname(col)
+            if key:
+                canon_map.setdefault(key, []).append(col)
+
+        ambiguous = {
+            key: sorted(set(cols))
+            for key, cols in canon_map.items()
+            if len(set(cols)) > 1
+        }
+
+        if ambiguous:
+            details = "; ".join(
+                f"{key}: {cols}" for key, cols in sorted(ambiguous.items())
+            )
+            die(f"Ambiguous column names after canonical cleanup: {details}")
 
     out.columns = cleaned
     return out
@@ -229,6 +257,19 @@ def safe_str_series(s: pd.Series) -> pd.Series:
     return s.astype("string").fillna("").str.strip()
 
 
+def has_value_series(s: pd.Series) -> pd.Series:
+    """Return True where a Series has a non missing and non blank value.
+
+    This treats Excel style blank strings as missing while preserving normal
+    numeric missingness semantics for numeric columns.
+    """
+    if pd.api.types.is_string_dtype(s) or s.dtype == object:
+        text = s.astype("string").str.strip()
+        return s.notna() & text.ne("").fillna(False)
+
+    return s.notna()
+
+
 def safe_upper(s: pd.Series) -> pd.Series:
     """Return a stripped uppercase nullable string view of a Series."""
     return safe_str_series(s).str.upper()
@@ -323,36 +364,52 @@ def read_excel_sheets(xlsx_path: Path, sheet: str | int) -> dict[str, pd.DataFra
     """Read one sheet or all sheets from an Excel workbook.
 
     The returned dictionary uses the real Excel sheet name, not merely the
-    numeric sheet index. This improves provenance in downstream outputs.
+    numeric sheet index. Exact sheet names win before numeric index
+    interpretation, so a sheet named "01" is read as the sheet named "01"
+    rather than sheet index 1.
     """
     xlsx_path = Path(xlsx_path)
 
     if not xlsx_path.exists():
         die(f"Excel file not found: {xlsx_path}")
 
-    selector = _coerce_sheet_selector(sheet)
     excel = pd.ExcelFile(xlsx_path, engine="openpyxl")
 
-    if isinstance(selector, str) and selector.lower() == "all":
-        return {
-            str(name): normalize_columns(pd.read_excel(excel, sheet_name=name))
-            for name in excel.sheet_names
-        }
+    if isinstance(sheet, str):
+        text = sheet.strip()
 
-    if isinstance(selector, int):
-        if selector < 0 or selector >= len(excel.sheet_names):
+        if text.lower() == "all":
+            return {
+                str(name): normalize_columns(pd.read_excel(excel, sheet_name=name))
+                for name in excel.sheet_names
+            }
+
+        if text in excel.sheet_names:
+            sheet_name = text
+        elif text.isdigit():
+            selector = int(text)
+            if selector < 0 or selector >= len(excel.sheet_names):
+                die(
+                    f"Sheet index {selector} is out of range. "
+                    f"Workbook has {len(excel.sheet_names)} sheets."
+                )
+            sheet_name = excel.sheet_names[selector]
+        else:
             die(
-                f"Sheet index {selector} is out of range. "
-                f"Workbook has {len(excel.sheet_names)} sheets."
-            )
-        sheet_name = excel.sheet_names[selector]
-    else:
-        sheet_name = str(selector)
-        if sheet_name not in excel.sheet_names:
-            die(
-                f"Sheet '{sheet_name}' not found. "
+                f"Sheet '{text}' not found. "
                 f"Available sheets: {excel.sheet_names}"
             )
+            sheet_name = ""
+    elif isinstance(sheet, int):
+        if sheet < 0 or sheet >= len(excel.sheet_names):
+            die(
+                f"Sheet index {sheet} is out of range. "
+                f"Workbook has {len(excel.sheet_names)} sheets."
+            )
+        sheet_name = excel.sheet_names[sheet]
+    else:
+        die(f"Unsupported sheet selector type: {type(sheet).__name__}")
+        sheet_name = ""
 
     df = pd.read_excel(excel, sheet_name=sheet_name)
     return {sheet_name: normalize_columns(df)}
@@ -450,8 +507,10 @@ def deep_update(
 
     Empty configs are treated as empty dictionaries. Non mapping config
     objects fail clearly because config files must have dictionary style keys.
+    The returned object does not share nested dictionaries or lists with the
+    input defaults.
     """
-    out: dict[str, Any] = dict(base or {})
+    out: dict[str, Any] = deepcopy(dict(base or {}))
 
     if override is None:
         return out
@@ -466,7 +525,7 @@ def deep_update(
         if isinstance(value, Mapping) and isinstance(out.get(key), Mapping):
             out[key] = deep_update(out[key], value)  # type: ignore[arg-type]
         else:
-            out[key] = value
+            out[key] = deepcopy(value)
 
     return out
 
@@ -477,16 +536,16 @@ def load_config(
 ) -> dict[str, Any]:
     """Load JSON, YAML, or no config, then merge it over defaults.
 
-    Accepted no config values are None, an empty string, and the string "None".
+    Accepted no config values are None, an empty string, "None", and "null".
     Empty YAML and JSON null are treated as empty dictionaries.
     """
-    base = dict(default or {})
+    base = deepcopy(dict(default or {}))
 
     if config_path is None:
         return base
 
     path_text = str(config_path).strip()
-    if path_text == "" or path_text.lower() == "none":
+    if path_text == "" or path_text.lower() in {"none", "null"}:
         return base
 
     path = Path(path_text)
@@ -551,23 +610,35 @@ def coerce_datetime(df: pd.DataFrame, col: str, utc: bool = True) -> None:
 
 
 def percent_missing(s: pd.Series) -> float:
-    """Return percentage of missing values in a Series."""
+    """Return percentage of missing or blank values in a Series."""
     n = len(s)
     if n == 0:
         return 0.0
-    return float(s.isna().sum()) / float(n) * 100.0
+
+    missing = ~has_value_series(s)
+    return float(missing.sum()) / float(n) * 100.0
 
 
 def make_missingness_table(df: pd.DataFrame) -> pd.DataFrame:
-    """Return a one row per column inventory of dtype and missingness."""
+    """Return a one row per column inventory of dtype and missingness.
+
+    Blank strings are counted as missing because they are common in Excel files.
+    """
     rows = []
+
     for c in df.columns:
+        missing_mask = ~has_value_series(df[c])
+
         rows.append(
             {
                 "column": c,
                 "dtype": str(df[c].dtype),
-                "n_missing": int(df[c].isna().sum()),
-                "pct_missing": round(percent_missing(df[c]), 2),
+                "n_missing": int(missing_mask.sum()),
+                "pct_missing": (
+                    round(float(missing_mask.mean() * 100.0), 2)
+                    if len(df)
+                    else 0.0
+                ),
             }
         )
 
@@ -731,16 +802,20 @@ def write_csv_and_parquet(
 
     tmp_csv = csv_path.with_suffix(csv_path.suffix + ".tmp")
 
-    df.to_csv(
-        tmp_csv,
-        index=False,
-        encoding="utf-8",
-        na_rep="",
-        lineterminator="\n",
-        date_format="%Y-%m-%dT%H:%M:%SZ",
-    )
-
-    tmp_csv.replace(csv_path)
+    try:
+        df.to_csv(
+            tmp_csv,
+            index=False,
+            encoding="utf-8",
+            na_rep="",
+            lineterminator="\n",
+            date_format="%Y-%m-%dT%H:%M:%SZ",
+        )
+        tmp_csv.replace(csv_path)
+    except Exception:
+        if tmp_csv.exists():
+            tmp_csv.unlink()
+        raise
 
     if not write_parquet:
         return False, "Parquet disabled by configuration"
@@ -773,6 +848,20 @@ def robust_outlier_flags(
     This produces screening flags, not automatic scientific rejection. The MAD
     rule is disabled when there are too few valid values.
     """
+    mad_k = float(mad_k)
+    min_n = int(min_n)
+
+    if not math.isfinite(mad_k) or mad_k <= 0:
+        die(f"mad_k must be a positive finite number, got {mad_k!r}")
+
+    if min_n < 1:
+        die(f"min_n must be >= 1, got {min_n!r}")
+
+    if max_abs is not None:
+        max_abs = float(max_abs)
+        if not math.isfinite(max_abs) or max_abs < 0:
+            die(f"max_abs must be non negative when supplied, got {max_abs!r}")
+
     xx = pd.to_numeric(x, errors="coerce")
     valid_n = int(xx.notna().sum())
 

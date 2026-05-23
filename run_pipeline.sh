@@ -38,6 +38,11 @@
 #                         Papermill, and oa_pipeline import checks are skipped.
 #     -h, --help          Show this help and exit.
 #
+# Environment:
+#     PYTHON_BIN          Optional Python executable to use. Defaults to python.
+#                         Example:
+#                             PYTHON_BIN=.venv/Scripts/python.exe ./run_pipeline.sh ...
+#
 # Examples:
 #     ./run_pipeline.sh data/oa_prelim_data.xlsx outputs/real
 #
@@ -66,6 +71,7 @@ START_FROM="02"
 DRY_RUN=0
 INPUT_XLSX=""
 OUTPUT_ROOT=""
+PYTHON_BIN="${PYTHON_BIN:-python}"
 
 # ---------------------------------------------------------------------
 # CLI helpers
@@ -237,7 +243,7 @@ if [[ ! -d "$NOTEBOOK_DIR" ]]; then
 fi
 
 TIMESTAMP="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
-RUNS_DIR="$SCRIPT_DIR/runs/$TIMESTAMP"
+RUNS_DIR="$SCRIPT_DIR/runs/${TIMESTAMP}_pid$$"
 mkdir -p "$RUNS_DIR"
 
 # ---------------------------------------------------------------------
@@ -245,15 +251,15 @@ mkdir -p "$RUNS_DIR"
 # ---------------------------------------------------------------------
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
-    python -c "import papermill" >/dev/null 2>&1 || {
+    "$PYTHON_BIN" -c "import papermill" >/dev/null 2>&1 || {
         echo "ERROR: papermill is not installed in this Python environment." >&2
-        echo "Install with: python -m pip install -e \".[runner]\"" >&2
+        echo "Install with: $PYTHON_BIN -m pip install -e \".[all]\"" >&2
         exit 2
     }
 
-    python -c "import oa_pipeline" >/dev/null 2>&1 || {
+    "$PYTHON_BIN" -c "import oa_pipeline" >/dev/null 2>&1 || {
         echo "ERROR: oa_pipeline is not importable in this Python environment." >&2
-        echo "Install with: python -m pip install -e \".[all]\"" >&2
+        echo "Install with: $PYTHON_BIN -m pip install -e \".[all]\"" >&2
         exit 2
     }
 fi
@@ -330,8 +336,39 @@ resolve_config() {
     echo "None"
 }
 
+resolve_qc_sheet_folder() {
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        echo "sheet_$SHEET"
+        return 0
+    fi
+
+    "$PYTHON_BIN" - "$INPUT_XLSX" "$SHEET" <<'PY'
+from pathlib import Path
+import sys
+
+import pandas as pd
+
+from oa_pipeline.common import safe_sheet_name
+
+xlsx = Path(sys.argv[1])
+sheet_index = int(sys.argv[2])
+
+excel = pd.ExcelFile(xlsx, engine="openpyxl")
+
+if sheet_index < 0 or sheet_index >= len(excel.sheet_names):
+    raise SystemExit(
+        f"Sheet index {sheet_index} is out of range. "
+        f"Workbook has {len(excel.sheet_names)} sheets."
+    )
+
+print("sheet_" + safe_sheet_name(excel.sheet_names[sheet_index]))
+PY
+}
+
 resolve_qc_derived_csv() {
-    local expected="$QC_OUT/sheet_$SHEET/data/derived.csv"
+    local sheet_folder
+    sheet_folder="$(resolve_qc_sheet_folder)"
+    local expected="$QC_OUT/$sheet_folder/data/derived.csv"
 
     if [[ "$DRY_RUN" -eq 1 ]]; then
         echo "$expected"
@@ -376,7 +413,7 @@ run_papermill() {
     local -a args=("$@")
 
     echo "----------------------------------------------------------------------"
-    echo "python -m papermill $notebook"
+    echo "$PYTHON_BIN -m papermill $notebook"
     for arg in "${args[@]}"; do
         echo "    $arg"
     done
@@ -386,7 +423,7 @@ run_papermill() {
         return 0
     fi
 
-    python -m papermill "$notebook" "$out_ipynb" "${args[@]}"
+    "$PYTHON_BIN" -m papermill "$notebook" "$out_ipynb" "${args[@]}"
 }
 
 # ---------------------------------------------------------------------
@@ -398,6 +435,7 @@ echo "OA pipeline run"
 echo "  input xlsx   : $INPUT_XLSX"
 echo "  output root  : $OUTPUT_ROOT"
 echo "  notebook dir : $NOTEBOOK_DIR"
+echo "  python bin   : $PYTHON_BIN"
 echo "  sheet        : $SHEET"
 echo "  start from   : Stage $START_FROM"
 echo "  config dir   : ${CONFIG_DIR:-(none)}"
@@ -518,6 +556,14 @@ if should_run 8; then
         -p OUT_DIR "$S4_OUT" \
         -p CONFIG_PATH "$CONFIG" \
         -p NO_PARQUET "$NO_PARQUET"
+fi
+
+# ---------------------------------------------------------------------
+# Final deliverable check
+# ---------------------------------------------------------------------
+
+if [[ "$DRY_RUN" -eq 0 ]] && should_run 8; then
+    require_file "$S4_OUT/data/analysis_ready.csv" "final Stage 4 deliverable"
 fi
 
 # ---------------------------------------------------------------------

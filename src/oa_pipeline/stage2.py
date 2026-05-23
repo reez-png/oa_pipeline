@@ -59,6 +59,7 @@ STAGE2_DEFAULTS: Dict[str, Any] = {
             "ta_corrected_umolkg",
             "ta_corrected",
             "ta_umol_kg",
+            "ta_umolkg",
             "ta",
             "TA",
         ],
@@ -73,11 +74,22 @@ STAGE2_DEFAULTS: Dict[str, Any] = {
             "ph",
         ],
         "ph_co2sys": ["ph_co2sys", "ph_calculated", "pH_calc", "ph_calc"],
-        "pco2_best_uatm": ["pco2_best_uatm", "pco2_calc_uatm", "pco2"],
+        "pco2_best_uatm": [
+            "pco2_best_uatm",
+            "pco2_calc_uatm",
+            "pco2_uatm",
+            "pCO2",
+            "pco2",
+        ],
         "dic_best_umol_kg": [
             "dic_best_umol_kg",
             "dic_calculated_umol_kg",
+            "dic_measured_umol_kg",
+            "dic_umol_kg",
+            "dic_umolkg",
             "dic_calc",
+            "DIC",
+            "dic",
         ],
         "ta_units_normalized": [
             "ta_units_normalized",
@@ -188,10 +200,14 @@ STAGE2_DEFAULTS: Dict[str, Any] = {
         "cruise_id",
         "transect_id",
         "station_id",
+        "sample_id",
         "depth_bin_m",
         "sample_day",
     ],
     "depth_bin_m": 1.0,
+    # Current default uses nearest depth binning. Use "floor" in config if
+    # samples should be grouped into lower edge depth bins instead.
+    "depth_bin_method": "nearest",
     "replicate_mean_vars": [
         "ph_best",
         "ph_co2sys",
@@ -209,13 +225,15 @@ STAGE2_DEFAULTS: Dict[str, Any] = {
         "silicate_umol_l",
         "chlorophyll",
     ],
+    # Screening thresholds inspired by common ocean acidification data quality
+    # objectives. These are replicate consistency flags, not formal measurement
+    # uncertainty estimates.
     "replicate_sd_thresholds": {
         "ph_best": 0.02,
         "ph_co2sys": 0.02,
         "ta_best_umolkg": 10.0,
     },
     "replicate_consistency_check_columns": [
-        "record_id",
         "sample_id",
         "ta_best_source",
         "ph_best_source",
@@ -255,7 +273,6 @@ STAGE2_DEFAULTS: Dict[str, Any] = {
             "carbon_input_pair_used",
         ],
         "metadata": [
-            "record_id",
             "sample_id",
             "cruise_id",
             "transect_id",
@@ -303,6 +320,35 @@ def _coalesce_columns_with_source(
 
     src = src.where(_has_value(out), pd.NA)
     return out, src
+
+
+
+
+def _alias_conflict_count(df: pd.DataFrame, candidates: List[str]) -> int:
+    """Count rows where candidate aliases contain conflicting non empty values.
+
+    Stage 2 is intentionally permissive: it warns through notes and still uses
+    precedence order rather than stopping. This supports reruns and partially
+    processed files, while still exposing potential provenance ambiguity.
+    """
+    if len(candidates) < 2:
+        return 0
+
+    existing = [col for col in candidates if col in df.columns]
+    if len(existing) < 2:
+        return 0
+
+    normalised = pd.DataFrame(index=df.index)
+
+    for col in existing:
+        normalised[col] = df[col].astype("string").str.strip()
+
+    present = normalised.notna() & normalised.ne("")
+    n_present = present.sum(axis=1)
+    n_unique = normalised.where(present).nunique(axis=1, dropna=True)
+
+    conflict = n_present.gt(1) & n_unique.gt(1)
+    return int(conflict.sum())
 
 
 def _normalise_for_conflict(series: pd.Series) -> pd.Series:
@@ -361,11 +407,20 @@ def materialize_canonical_aliases(
     """Ensure canonical columns exist, filling empty values from aliases.
 
     If a canonical column already exists but is partly empty, Stage 2 still
-    tries later aliases and fills only the missing cells. This prevents an
-    empty canonical column from hiding useful alias data.
+    tries later aliases and fills only the missing cells.
+
+    The resolved source tracks the original input column where possible.
+    This prevents a column created earlier in this same function, for example
+    pco2_calc_uatm copied from pCO2, from being reported as the true source
+    for a later best field.
     """
     out = df.copy()
     resolved: Dict[str, Optional[str]] = {}
+
+    # Track source lineage. Original input columns point to themselves.
+    # Canonical columns created during this function point back to the
+    # original column that supplied their first non missing value.
+    lineage: Dict[str, str] = {col: col for col in out.columns}
 
     for canonical, aliases in alias_map.items():
         candidates: List[str] = []
@@ -382,15 +437,28 @@ def materialize_canonical_aliases(
             resolved[canonical] = None
             continue
 
+        n_conflicts = _alias_conflict_count(out, candidates)
+        if n_conflicts:
+            notes.append(
+                f"WARNING: canonical {canonical!r} had {n_conflicts} rows with "
+                f"conflicting non empty alias values among {candidates}. "
+                "Stage 2 used precedence order to coalesce."
+            )
+
         values, sources = _coalesce_columns_with_source(out, candidates)
         out[canonical] = values
 
         source_nonmissing = sources.dropna()
-        resolved[canonical] = (
-            str(source_nonmissing.iloc[0])
-            if not source_nonmissing.empty
-            else candidates[0]
-        )
+
+        if not source_nonmissing.empty:
+            immediate_source = str(source_nonmissing.iloc[0])
+            original_source = lineage.get(immediate_source, immediate_source)
+        else:
+            immediate_source = candidates[0]
+            original_source = lineage.get(immediate_source, immediate_source)
+
+        resolved[canonical] = original_source
+        lineage[canonical] = original_source
 
         if len(candidates) > 1:
             notes.append(
@@ -493,8 +561,14 @@ def add_time_and_depth_keys(
     notes: List[str],
     depth_round_decimals: int = 1,
     depth_bin_m: float = 1.0,
+    depth_bin_method: str = "nearest",
 ) -> pd.DataFrame:
-    """Add sample_month, sample_day, depth_round_m, and depth_bin_m."""
+    """Add sample_month, sample_day, depth_round_m, and depth_bin_m.
+
+    depth_bin_method controls how depth bins are assigned:
+    "nearest" rounds to the nearest bin center, while "floor" assigns the lower
+    bin edge.
+    """
     out = df.copy()
 
     if "sample_date" in out.columns:
@@ -523,7 +597,14 @@ def add_time_and_depth_keys(
         if bin_size <= 0:
             die(f"depth_bin_m must be > 0, got {depth_bin_m}")
 
-        out["depth_bin_m"] = (depth / bin_size).round().mul(bin_size)
+        method = str(depth_bin_method).strip().lower()
+
+        if method == "nearest":
+            out["depth_bin_m"] = (depth / bin_size).round().mul(bin_size)
+        elif method == "floor":
+            out["depth_bin_m"] = (depth // bin_size).mul(bin_size)
+        else:
+            die(f"Unknown depth_bin_method: {depth_bin_method!r}. Use 'nearest' or 'floor'.")
     else:
         out["depth_round_m"] = pd.Series(pd.NA, index=out.index, dtype="Float64")
         out["depth_bin_m"] = pd.Series(pd.NA, index=out.index, dtype="Float64")

@@ -19,6 +19,7 @@ Import as:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -68,7 +69,9 @@ STAGE4_DEFAULTS: Dict[str, Any] = {
         "ta_best_umolkg": [
             "ta_best_umolkg",
             "ta_corrected_umolkg",
+            "ta_corrected",
             "ta_umol_kg",
+            "ta_umolkg",
             "ta_best",
             "ta",
             "TA",
@@ -91,36 +94,41 @@ STAGE4_DEFAULTS: Dict[str, Any] = {
             "pH_calc",
             "ph_calc",
         ],
-        "pco2_best_uatm": ["pco2_best_uatm", "pco2_calc_uatm", "pco2", "pCO2"],
+        "pco2_best_uatm": [
+            "pco2_best_uatm",
+            "pco2_calc_uatm",
+            "pco2_uatm",
+            "pCO2",
+            "pco2",
+        ],
         "dic_best_umol_kg": [
             "dic_best_umol_kg",
             "dic_calculated_umol_kg",
+            "dic_measured_umol_kg",
+            "dic_umol_kg",
+            "dic_umolkg",
             "dic_calc",
-            "dic",
             "DIC",
+            "dic",
         ],
         "co2aq_calc_umol_kg": [
             "co2aq_calc_umol_kg",
-            "co2aq",
-            "CO2aq",
-            "co2_aq",
-            "aqueous_co2",
-            "co2",
-            "CO2",
+            "co2aq_umol_kg",
+            "co2aq_umolkg",
+            "co2_aq_umol_kg",
+            "aqueous_co2_umol_kg",
         ],
         "hco3_calc_umol_kg": [
             "hco3_calc_umol_kg",
-            "hco3",
-            "HCO3",
-            "hco3-",
-            "HCO3-",
+            "hco3_umol_kg",
+            "hco3_umolkg",
+            "bicarbonate_umol_kg",
         ],
         "co3_calc_umol_kg": [
             "co3_calc_umol_kg",
-            "co3",
-            "CO3",
-            "co3-",
-            "CO3-",
+            "co3_umol_kg",
+            "co3_umolkg",
+            "carbonate_umol_kg",
         ],
         "omega_aragonite_calc": [
             "omega_aragonite_calc",
@@ -180,6 +188,7 @@ STAGE4_DEFAULTS: Dict[str, Any] = {
         "flag_stage2_replicate_conflict_carried": ["flag_stage2_replicate_conflict_carried"],
         "flag_solver_unknown": ["flag_solver_unknown"],
         "flag_carbon_input_pair_unknown": ["flag_carbon_input_pair_unknown"],
+        "flag_any_stage3_review_issue": ["flag_any_stage3_review_issue"],
     },
     "required_stage4_key_columns": [
         "sample_id",
@@ -312,10 +321,35 @@ STAGE4_DEFAULTS: Dict[str, Any] = {
         "require_matching_units": True,
     },
     "strict_dic_candidates": {
-        "dic": ["dic_best_umol_kg", "dic_calculated_umol_kg", "dic_calc", "dic", "DIC"],
-        "co2aq": ["co2aq_calc_umol_kg", "co2aq", "CO2aq", "co2_aq", "aqueous_co2", "co2", "CO2"],
-        "hco3": ["hco3_calc_umol_kg", "hco3", "HCO3", "hco3-", "HCO3-"],
-        "co3": ["co3_calc_umol_kg", "co3", "CO3", "co3-", "CO3-"],
+        "dic": [
+            "dic_best_umol_kg",
+            "dic_calculated_umol_kg",
+            "dic_measured_umol_kg",
+            "dic_umol_kg",
+            "dic_umolkg",
+            "dic_calc",
+            "DIC",
+            "dic",
+        ],
+        "co2aq": [
+            "co2aq_calc_umol_kg",
+            "co2aq_umol_kg",
+            "co2aq_umolkg",
+            "co2_aq_umol_kg",
+            "aqueous_co2_umol_kg",
+        ],
+        "hco3": [
+            "hco3_calc_umol_kg",
+            "hco3_umol_kg",
+            "hco3_umolkg",
+            "bicarbonate_umol_kg",
+        ],
+        "co3": [
+            "co3_calc_umol_kg",
+            "co3_umol_kg",
+            "co3_umolkg",
+            "carbonate_umol_kg",
+        ],
         "dic_unit": ["dic_unit_normalized", "dic_unit", "DIC_unit"],
         "co2aq_unit": ["co2aq_unit_normalized", "co2aq_unit", "CO2aq_unit", "co2_unit", "CO2_unit"],
         "hco3_unit": ["hco3_unit_normalized", "hco3_unit", "HCO3_unit"],
@@ -403,6 +437,11 @@ _INHERITED_BOOL_COLS = [
     "flag_stage2_replicate_conflict_carried",
     "flag_solver_unknown",
     "flag_carbon_input_pair_unknown",
+    "flag_any_stage3_review_issue",
+    "flag_dic_species_nonpositive_dic_audit",
+    "flag_dic_species_negative_co2aq_audit",
+    "flag_dic_species_negative_hco3_audit",
+    "flag_dic_species_negative_co3_audit",
 ]
 
 _CALCULATED_CARBONATE_COLS = [
@@ -423,20 +462,26 @@ _CALCULATED_CARBONATE_COLS = [
 
 
 def _as_bool(value: Any) -> bool:
-    """Convert common config boolean spellings to bool."""
+    """Convert common config boolean spellings to bool.
+
+    Unknown strings raise a ValueError instead of being treated as truthy. This
+    prevents typos such as "maybe" from silently enabling an audit option.
+    """
     if isinstance(value, bool):
         return value
 
-    if pd.isna(value):
+    if value is None or pd.isna(value):
         return False
 
     text = str(value).strip().lower()
+
     if text in {"true", "t", "yes", "y", "1", "on"}:
         return True
-    if text in {"false", "f", "no", "n", "0", "off", ""}:
+
+    if text in {"false", "f", "no", "n", "0", "off", "", "none", "null", "<na>", "nan"}:
         return False
 
-    return bool(value)
+    raise ValueError(f"Cannot parse boolean value: {value!r}")
 
 
 def _has_value(series: pd.Series) -> pd.Series:
@@ -537,6 +582,10 @@ def _empty_dic_audit_result(df: pd.DataFrame, audit_not_run: bool = False) -> pd
             "flag_dic_species_audit_strict": pd.Series(False, index=df.index, dtype="boolean"),
             "flag_dic_species_unit_mismatch_audit": pd.Series(False, index=df.index, dtype="boolean"),
             "flag_dic_species_unit_missing_audit": pd.Series(False, index=df.index, dtype="boolean"),
+            "flag_dic_species_nonpositive_dic_audit": pd.Series(False, index=df.index, dtype="boolean"),
+            "flag_dic_species_negative_co2aq_audit": pd.Series(False, index=df.index, dtype="boolean"),
+            "flag_dic_species_negative_hco3_audit": pd.Series(False, index=df.index, dtype="boolean"),
+            "flag_dic_species_negative_co3_audit": pd.Series(False, index=df.index, dtype="boolean"),
         },
         index=df.index,
     )
@@ -856,12 +905,26 @@ class DicSpeciesAudit:
 
     def __post_init__(self) -> None:
         self.enabled = _as_bool(self.enabled)
+        self.require_matching_units = _as_bool(self.require_matching_units)
+
         self.abs_tol_umolkg = float(self.abs_tol_umolkg)
         self.rel_tol = float(self.rel_tol)
-        self.require_matching_units = _as_bool(self.require_matching_units)
+
+        if not math.isfinite(self.abs_tol_umolkg):
+            raise ValueError(
+                "DicSpeciesAudit.abs_tol_umolkg must be finite, "
+                f"got {self.abs_tol_umolkg!r}."
+            )
+
+        if not math.isfinite(self.rel_tol):
+            raise ValueError(
+                "DicSpeciesAudit.rel_tol must be finite, "
+                f"got {self.rel_tol!r}."
+            )
 
         if self.abs_tol_umolkg < 0:
             raise ValueError("DicSpeciesAudit.abs_tol_umolkg must be non negative.")
+
         if self.rel_tol < 0:
             raise ValueError("DicSpeciesAudit.rel_tol must be non negative.")
 
@@ -925,7 +988,21 @@ def dic_species_audit(
     co3 = pd.to_numeric(df[co3_col], errors="coerce")
 
     vals_ok = dic.notna() & co2.notna() & hco3.notna() & co3.notna()
-    values_missing = ~vals_ok
+
+    any_species_evidence = dic.notna() | co2.notna() | hco3.notna() | co3.notna()
+    values_missing = any_species_evidence & ~vals_ok
+
+    dic_nonpositive = dic.notna() & (dic <= 0)
+    co2_negative = co2.notna() & (co2 < 0)
+    hco3_negative = hco3.notna() & (hco3 < 0)
+    co3_negative = co3.notna() & (co3 < 0)
+
+    negative_species = (
+        dic_nonpositive
+        | co2_negative
+        | hco3_negative
+        | co3_negative
+    )
 
     unit_missing = pd.Series(False, index=df.index, dtype="boolean")
     unit_mismatch = pd.Series(False, index=df.index, dtype="boolean")
@@ -956,7 +1033,10 @@ def dic_species_audit(
     species_sum = co2 + hco3 + co3
     diff = dic - species_sum
     tol = (dic.abs() * check.rel_tol).clip(lower=check.abs_tol_umolkg)
-    strict_fail = (checkable & (diff.abs() > tol)).astype("boolean")
+    strict_fail = (
+        negative_species
+        | (checkable & (diff.abs() > tol))
+    ).astype("boolean")
 
     result = pd.DataFrame(
         {
@@ -972,6 +1052,10 @@ def dic_species_audit(
             "flag_dic_species_audit_strict": strict_fail,
             "flag_dic_species_unit_mismatch_audit": unit_mismatch,
             "flag_dic_species_unit_missing_audit": unit_missing,
+            "flag_dic_species_nonpositive_dic_audit": dic_nonpositive.astype("boolean"),
+            "flag_dic_species_negative_co2aq_audit": co2_negative.astype("boolean"),
+            "flag_dic_species_negative_hco3_audit": hco3_negative.astype("boolean"),
+            "flag_dic_species_negative_co3_audit": co3_negative.astype("boolean"),
         },
         index=df.index,
     )
@@ -1029,6 +1113,10 @@ def add_readiness_status(
     out["flag_audit_dic_unit_missing"] = _bcol(out, "flag_dic_species_unit_missing_audit")
     out["flag_audit_dic_audit_not_run"] = _bcol(out, "flag_dic_species_audit_not_run")
     out["flag_audit_dic_values_missing"] = _bcol(out, "flag_dic_species_values_missing_audit")
+    out["flag_audit_dic_nonpositive"] = _bcol(out, "flag_dic_species_nonpositive_dic_audit")
+    out["flag_audit_negative_co2aq"] = _bcol(out, "flag_dic_species_negative_co2aq_audit")
+    out["flag_audit_negative_hco3"] = _bcol(out, "flag_dic_species_negative_hco3_audit")
+    out["flag_audit_negative_co3"] = _bcol(out, "flag_dic_species_negative_co3_audit")
 
     _set_flag_for_existing_index(out, missing_key_idx, "flag_audit_missing_key")
 

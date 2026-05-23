@@ -29,6 +29,7 @@ those provenance issues separately.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -73,7 +74,9 @@ STAGE3_DEFAULTS: Dict[str, Any] = {
         "ta_best_umolkg": [
             "ta_best_umolkg",
             "ta_corrected_umolkg",
+            "ta_corrected",
             "ta_umol_kg",
+            "ta_umolkg",
             "ta",
             "TA",
         ],
@@ -95,36 +98,41 @@ STAGE3_DEFAULTS: Dict[str, Any] = {
             "pH_calc",
             "ph_calc",
         ],
-        "pco2_best_uatm": ["pco2_best_uatm", "pco2_calc_uatm", "pco2"],
+        "pco2_best_uatm": [
+            "pco2_best_uatm",
+            "pco2_calc_uatm",
+            "pco2_uatm",
+            "pCO2",
+            "pco2",
+        ],
         "dic_best_umol_kg": [
             "dic_best_umol_kg",
             "dic_calculated_umol_kg",
+            "dic_measured_umol_kg",
+            "dic_umol_kg",
+            "dic_umolkg",
             "dic_calc",
-            "dic",
             "DIC",
+            "dic",
         ],
         "co2aq_calc_umol_kg": [
             "co2aq_calc_umol_kg",
-            "co2aq",
-            "CO2aq",
-            "co2_aq",
-            "aqueous_co2",
-            "co2",
-            "CO2",
+            "co2aq_umol_kg",
+            "co2aq_umolkg",
+            "co2_aq_umol_kg",
+            "aqueous_co2_umol_kg",
         ],
         "hco3_calc_umol_kg": [
             "hco3_calc_umol_kg",
-            "hco3",
-            "HCO3",
-            "hco3-",
-            "HCO3-",
+            "hco3_umol_kg",
+            "hco3_umolkg",
+            "bicarbonate_umol_kg",
         ],
         "co3_calc_umol_kg": [
             "co3_calc_umol_kg",
-            "co3",
-            "CO3",
-            "co3-",
-            "CO3-",
+            "co3_umol_kg",
+            "co3_umolkg",
+            "carbonate_umol_kg",
         ],
         "ph_scale_observed_normalized": [
             "ph_scale_observed_normalized",
@@ -268,6 +276,15 @@ STAGE3_DEFAULTS: Dict[str, Any] = {
         "dic_mad_k": 3.5,
         "ph_mad_k": 3.5,
     },
+    # Stage 3 does not run a carbonate solver. Production default is therefore
+    # to report missing solver and input pair provenance rather than inventing it.
+    # Enable this only for controlled synthetic examples or legacy files where
+    # the calculated carbonate output provenance is known externally.
+    "provenance_backfill": {
+        "enabled": False,
+        "solver": "synthetic_example_generator",
+        "input_pair": "synthetic TA + pH_best",
+    },
 }
 
 
@@ -287,11 +304,19 @@ class CarbonateIntegrityThresholds:
     ph_mad_k: float = 3.5
 
     def __post_init__(self) -> None:
-        self.dic_abs_tol = float(self.dic_abs_tol)
-        self.dic_rel_tol = float(self.dic_rel_tol)
-        self.ph_diag_tol = float(self.ph_diag_tol)
-        self.dic_mad_k = float(self.dic_mad_k)
-        self.ph_mad_k = float(self.ph_mad_k)
+        for name in [
+            "dic_abs_tol",
+            "dic_rel_tol",
+            "ph_diag_tol",
+            "dic_mad_k",
+            "ph_mad_k",
+        ]:
+            value = float(getattr(self, name))
+
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite, got {value!r}")
+
+            setattr(self, name, value)
 
         if self.dic_abs_tol < 0:
             raise ValueError("dic_abs_tol must be non negative.")
@@ -370,12 +395,10 @@ _CALCULATED_CARBONATE_COLS = [
     "co3_calc_umol_kg",
 ]
 
-# This backfill is intended for the bundled synthetic example pipeline where
-# calculated carbonate fields are already PyCO2SYS style products. For real
-# production data, prefer carrying solver provenance forward from the stage that
-# actually generated the carbonate outputs.
-_DEFAULT_BACKFILLED_SOLVER = "PyCO2SYS"
-_DEFAULT_BACKFILLED_INPUT_PAIR = "TA + pH_best"
+# Stage 3 does not run a carbonate solver. Backfill defaults are intentionally
+# labelled synthetic and are disabled unless config explicitly enables them.
+_DEFAULT_BACKFILLED_SOLVER = "synthetic_example_generator"
+_DEFAULT_BACKFILLED_INPUT_PAIR = "synthetic TA + pH_best"
 
 
 def _normalize_scale_series(series: pd.Series) -> pd.Series:
@@ -411,13 +434,24 @@ def _backfill_calculated_carbonate_provenance(
     out: pd.DataFrame,
     has_calculated: pd.Series,
     notes: List[str],
+    enabled: bool = False,
+    solver: str = _DEFAULT_BACKFILLED_SOLVER,
+    input_pair: str = _DEFAULT_BACKFILLED_INPUT_PAIR,
 ) -> None:
-    """Backfill missing solver provenance where calculated fields already exist."""
+    """Optionally backfill solver provenance where calculated fields exist.
+
+    Stage 3 does not calculate carbonate chemistry. When backfill is disabled,
+    missing provenance remains missing and is flagged by flag_solver_unknown or
+    flag_carbon_input_pair_unknown. This is the correct production default.
+    """
     if "carbonate_solver" not in out.columns:
         out["carbonate_solver"] = empty_string_series(out.index)
 
     if "carbon_input_pair_used" not in out.columns:
         out["carbon_input_pair_used"] = empty_string_series(out.index)
+
+    if not enabled:
+        return
 
     calculated_mask = has_calculated.fillna(False).astype(bool)
     solver_missing = ~_has_value(out["carbonate_solver"])
@@ -427,17 +461,17 @@ def _backfill_calculated_carbonate_provenance(
     pair_fill_mask = calculated_mask & pair_missing
 
     if solver_fill_mask.any():
-        out.loc[solver_fill_mask, "carbonate_solver"] = _DEFAULT_BACKFILLED_SOLVER
+        out.loc[solver_fill_mask, "carbonate_solver"] = solver
         notes.append(
             "Backfilled carbonate_solver for rows with calculated carbonate outputs "
-            f"using {_DEFAULT_BACKFILLED_SOLVER!r}."
+            f"using {solver!r}."
         )
 
     if pair_fill_mask.any():
-        out.loc[pair_fill_mask, "carbon_input_pair_used"] = _DEFAULT_BACKFILLED_INPUT_PAIR
+        out.loc[pair_fill_mask, "carbon_input_pair_used"] = input_pair
         notes.append(
             "Backfilled carbon_input_pair_used for rows with calculated carbonate "
-            f"outputs using {_DEFAULT_BACKFILLED_INPUT_PAIR!r}."
+            f"outputs using {input_pair!r}."
         )
 
 
@@ -445,6 +479,7 @@ def add_canonical_helper_columns(
     df: pd.DataFrame,
     notes: List[str],
     depth_round_decimals: int = 1,
+    provenance_backfill: Optional[Dict[str, Any]] = None,
 ) -> pd.DataFrame:
     """Add Stage 3 helper columns and normalise existing columns."""
     out = df.copy()
@@ -536,7 +571,16 @@ def add_canonical_helper_columns(
     has_calculated = _calculated_carbonate_present(out)
     out["has_calculated_carbonate_output"] = has_calculated.astype("boolean")
 
-    _backfill_calculated_carbonate_provenance(out, has_calculated, notes)
+    backfill_cfg = provenance_backfill or {}
+
+    _backfill_calculated_carbonate_provenance(
+        out,
+        has_calculated,
+        notes,
+        enabled=bool(backfill_cfg.get("enabled", False)),
+        solver=str(backfill_cfg.get("solver", _DEFAULT_BACKFILLED_SOLVER)),
+        input_pair=str(backfill_cfg.get("input_pair", _DEFAULT_BACKFILLED_INPUT_PAIR)),
+    )
 
     out["flag_solver_unknown"] = (
         has_calculated.fillna(False) & ~_has_value(out["carbonate_solver"])
@@ -613,14 +657,22 @@ def _dic_block(
     units_complete = all(col in df.columns for col in unit_cols)
 
     if units_complete:
-        unit_present = df[unit_cols].apply(_has_value).all(axis=1)
+        units = df[unit_cols].copy()
+
+        for col in unit_cols:
+            units[col] = _normalize_unit_series(units[col])
+
+        unit_present = units.apply(_has_value).all(axis=1)
         unit_same = (
-            (df[unit_cols[0]] == df[unit_cols[1]])
-            & (df[unit_cols[0]] == df[unit_cols[2]])
-            & (df[unit_cols[0]] == df[unit_cols[3]])
+            (units[unit_cols[0]] == units[unit_cols[1]])
+            & (units[unit_cols[0]] == units[unit_cols[2]])
+            & (units[unit_cols[0]] == units[unit_cols[3]])
         )
+
         out["flag_dic_unit_missing"] = (vals_ok & ~unit_present).astype("boolean")
-        out["flag_dic_unit_mismatch"] = (vals_ok & unit_present & ~unit_same).astype("boolean")
+        out["flag_dic_unit_mismatch"] = (
+            vals_ok & unit_present & ~unit_same.fillna(False)
+        ).astype("boolean")
     else:
         out["flag_dic_unit_missing"] = vals_ok.astype("boolean")
         out["flag_dic_unit_mismatch"] = pd.Series(False, index=df.index, dtype="boolean")
@@ -768,7 +820,12 @@ def _ph_block(
     scale_calc_present = _has_value(scale_calc)
     scale_known = scale_obs_present & scale_calc_present
     scale_mismatch = scale_known & (scale_obs != scale_calc)
-    accepted = {str(item).strip().lower() for item in accepted_ph_scales}
+    accepted = {normalize_ph_scale(item) for item in accepted_ph_scales}
+    accepted = {
+        item
+        for item in accepted
+        if pd.notna(item) and str(item).strip() != ""
+    }
     strict_possible = vals_ok & scale_known & ~scale_mismatch.fillna(False)
 
     out["ph_diag_values_present_row"] = vals_ok.astype("boolean")
@@ -912,6 +969,13 @@ def carbonate_integrity_checks(
         | flag("flag_ph_diag_mismatch_robust")
     ).astype("boolean")
 
+    out["flag_any_stage3_review_issue"] = (
+        flag("flag_any_carbonate_issue")
+        | flag("flag_stage2_replicate_conflict_carried")
+        | flag("flag_solver_unknown")
+        | flag("flag_carbon_input_pair_unknown")
+    ).astype("boolean")
+
     count_true = lambda col: int(out[col].fillna(False).sum()) if col in out.columns else 0
     first_bool = lambda col: bool(out[col].fillna(False).iloc[0]) if col in out.columns and len(out) else False
 
@@ -943,6 +1007,7 @@ def carbonate_integrity_checks(
         "n_carbon_input_pair_unknown": count_true("flag_carbon_input_pair_unknown"),
         "n_any_carbonate_issue": count_true("flag_any_carbonate_issue"),
         "n_any_carbonate_issue_strict": count_true("flag_any_carbonate_issue_strict"),
+        "n_any_stage3_review_issue": count_true("flag_any_stage3_review_issue"),
         "accepted_ph_scales": list(accepted_ph_scales),
         "dic_abs_tol": thr.dic_abs_tol,
         "dic_rel_tol": thr.dic_rel_tol,
@@ -985,6 +1050,7 @@ _AGG_MAP = {
     "n_carbon_input_pair_unknown": ("flag_carbon_input_pair_unknown", "sum"),
     "n_any_carbonate_issue": ("flag_any_carbonate_issue", "sum"),
     "n_any_carbonate_issue_strict": ("flag_any_carbonate_issue_strict", "sum"),
+    "n_any_stage3_review_issue": ("flag_any_stage3_review_issue", "sum"),
 }
 
 

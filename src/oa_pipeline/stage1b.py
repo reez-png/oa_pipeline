@@ -12,8 +12,9 @@ Import as:
     from oa_pipeline.stage1b import ...
 
 Stage 1B prepares analysis inputs. It does not run PyCO2SYS and therefore does
-not claim carbonate solver provenance. Solver metadata should be filled by the
-stage that actually performs carbonate chemistry calculations.
+not invent carbonate solver provenance. Existing solver metadata is preserved
+when present, and missing solver metadata remains missing unless the user
+explicitly supplies a real default in configuration.
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ from .common import (
     coalesce_numeric_series,
     coalesce_string_series,
     coerce_datetime,
-    empty_bool_series,
     empty_float_series,
     empty_string_series,
     existing_columns,
@@ -66,11 +66,16 @@ STAGE1B_DEFAULTS: Dict[str, Any] = {
         "ta_corrected_umolkg",
         "ta_corrected",
         "ta_umol_kg",
+        "ta_umolkg",
         "ta",
         "TA",
         "ta_best_umolkg",
     ],
+    # ph_after_phstd_qc is created inside add_best_analysis_fields. It carries
+    # either true pH standard corrected pH or the original pH fallback from the
+    # QC module, with row level source status preserved separately.
     "ph_precedence": [
+        "ph_after_phstd_qc",
         "ph_corrected_from_phstd",
         "pH_corrected_from_std",
         "ph_observed",
@@ -89,12 +94,19 @@ STAGE1B_DEFAULTS: Dict[str, Any] = {
     ],
     "pco2_precedence": [
         "pco2_calc_uatm",
+        "pco2_uatm",
+        "pCO2",
         "pco2",
         "pco2_best_uatm",
     ],
     "dic_precedence": [
         "dic_calculated_umol_kg",
+        "dic_measured_umol_kg",
+        "dic_umol_kg",
+        "dic_umolkg",
         "dic_calc",
+        "DIC",
+        "dic",
         "dic_best_umol_kg",
     ],
     "status_candidates": {
@@ -129,9 +141,13 @@ STAGE1B_DEFAULTS: Dict[str, Any] = {
         "pH_calc_scale",
     ],
     "analysis_policy": {
-        # Conservative default: if a QC status column is expected but absent,
-        # Stage 1B should not silently call rows safe for analysis.
+        # Conservative default: TA QC status is required. pH QC status is not
+        # required by default because pH QC may be represented by phstd_status
+        # and row level pH fallback provenance.
         "missing_qc_status_blocks_analysis": True,
+        "required_qc_status_norm_columns": [
+            "ta_qc_status_norm",
+        ],
         # Status values allowed to pass the QC gate. Blank or missing values
         # are handled separately by missing_qc_status_blocks_analysis.
         "allowed_qc_status_for_analysis": [
@@ -140,9 +156,14 @@ STAGE1B_DEFAULTS: Dict[str, Any] = {
             "NO_ADJUST",
             "ADJUST",
         ],
-        # If True, rows whose pH best value came from pH standard correction
-        # are blocked when phstd_status is FAIL.
+        # If True, rows whose pH best value was truly pH standard corrected are
+        # blocked when phstd_status is FAIL. Original pH fallback rows are not
+        # treated as corrected pH.
         "phstd_fail_blocks_corrected_ph": False,
+        "corrected_ph_status_source_names": [
+            "phstd_corrected",
+        ],
+        # Kept for backward compatibility with older configs and reports.
         "corrected_ph_source_names": [
             "ph_corrected_from_phstd",
             "pH_corrected_from_std",
@@ -156,9 +177,8 @@ STAGE1B_DEFAULTS: Dict[str, Any] = {
         "accepted_ph_scale_observed": ["total"],
     },
     "provenance_defaults": {
-        # Stage 1B does not run carbonate chemistry calculations. Solver and
-        # input pair metadata should be filled by Stage 2 or the calculation
-        # stage that actually runs the solver.
+        # Stage 1B preserves existing carbonate solver and input pair provenance.
+        # It does not invent solver metadata when those columns are absent.
         "carbonate_solver": pd.NA,
         "carbon_input_pair_used": pd.NA,
         "preferred_ta_for_analysis": "ta_best_umolkg",
@@ -194,6 +214,17 @@ def _has_value(s: pd.Series) -> pd.Series:
     return s.notna()
 
 
+def _scalar_default_has_value(value: Any) -> bool:
+    """Return True when a scalar config default is usable for filling blanks."""
+    if value is None or value is pd.NA:
+        return False
+
+    try:
+        return not bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return True
+
+
 def _bool_series(df: pd.DataFrame, col: str, default: bool = False) -> pd.Series:
     """Return a clean bool Series from a possibly absent or nullable column."""
     if col not in df.columns:
@@ -207,7 +238,7 @@ def _bool_series(df: pd.DataFrame, col: str, default: bool = False) -> pd.Series
 
     text = s.astype("string").str.strip().str.upper()
     true_values = {"TRUE", "T", "YES", "Y", "1"}
-    false_values = {"FALSE", "F", "NO", "N", "0"}
+    false_values = {"FALSE", "F", "NO", "N", "0", "", "NONE", "NULL", "<NA>", "NAN"}
     parsed = text.map(
         lambda value: (
             True
@@ -247,16 +278,21 @@ def _add_range_triplet(
     low: float,
     high: float,
 ) -> None:
-    """Add missing, non numeric, and out of range flags for one value column."""
+    """Add missing, non numeric, and out of range flags for one value column.
+
+    A column absent from the dataframe is treated as not assessed, not as a
+    missing value for every row. Core chemistry missingness is handled by
+    flag_core_chemistry_missing.
+    """
     if value_col in df.columns:
         missing, non_numeric, out_of_range = _range_flags(df[value_col], low, high)
         df[missing_flag] = missing
         df[non_numeric_flag] = non_numeric
         df[out_of_range_flag] = out_of_range
     else:
-        df[missing_flag] = pd.Series(True, index=df.index, dtype="boolean")
-        df[non_numeric_flag] = pd.Series(pd.NA, index=df.index, dtype="boolean")
-        df[out_of_range_flag] = pd.Series(pd.NA, index=df.index, dtype="boolean")
+        df[missing_flag] = pd.Series(False, index=df.index, dtype="boolean")
+        df[non_numeric_flag] = pd.Series(False, index=df.index, dtype="boolean")
+        df[out_of_range_flag] = pd.Series(False, index=df.index, dtype="boolean")
 
 
 def _status_is_allowed(
@@ -306,6 +342,11 @@ def build_numeric_candidates_for_stage1b(config: Dict[str, Any]) -> List[str]:
             "phosphate_umol_l",
             "silicate_umol_l",
             "chlorophyll",
+            "co2aq_calc_umol_kg",
+            "hco3_calc_umol_kg",
+            "co3_calc_umol_kg",
+            "omega_calcite_calc",
+            "omega_aragonite_calc",
         ]
     )
 
@@ -330,21 +371,45 @@ def add_status_normalizations(
 ) -> Dict[str, Optional[str]]:
     """Add normalised QC status columns in place.
 
-    For each configured status family, the canonical status column is a trimmed
-    string and the companion `<status>_norm` column is uppercase for comparisons.
+    If a raw status column exists, it is used to rebuild the canonical status
+    and normalised status columns.
+
+    If no raw status column exists but an existing normalised column is already
+    present, preserve it instead of overwriting it with blanks. This supports
+    reruns or partially processed files that already contain columns such as
+    ta_qc_status_norm.
     """
     used: Dict[str, Optional[str]] = {}
 
     for out_col, candidates in config.get("status_candidates", {}).items():
+        norm_col = f"{out_col}_norm"
         src_col = first_existing(df, candidates)
         used[out_col] = src_col
 
         if src_col:
             df[out_col] = safe_str_series(df[src_col]).replace("", pd.NA)
-            df[f"{out_col}_norm"] = safe_upper(df[src_col]).replace("", pd.NA)
-        else:
-            df[out_col] = empty_string_series(df.index)
-            df[f"{out_col}_norm"] = empty_string_series(df.index)
+            df[norm_col] = safe_upper(df[src_col]).replace("", pd.NA)
+            continue
+
+        if norm_col in df.columns:
+            df[norm_col] = safe_upper(df[norm_col]).replace("", pd.NA)
+
+            if out_col not in df.columns:
+                df[out_col] = safe_str_series(df[norm_col]).replace("", pd.NA)
+            else:
+                df[out_col] = safe_str_series(df[out_col]).replace("", pd.NA)
+
+            used[out_col] = norm_col
+            continue
+
+        if out_col in df.columns:
+            df[out_col] = safe_str_series(df[out_col]).replace("", pd.NA)
+            df[norm_col] = safe_upper(df[out_col]).replace("", pd.NA)
+            used[out_col] = out_col
+            continue
+
+        df[out_col] = empty_string_series(df.index)
+        df[norm_col] = empty_string_series(df.index)
 
     return used
 
@@ -387,9 +452,44 @@ def add_best_analysis_fields(
     df["ta_best_umolkg"], df["ta_best_source"] = coalesce_numeric_series(df, ta_candidates)
     meta["ta_precedence_used"] = ta_candidates
 
+    corrected_ph_col = first_existing(
+        df,
+        ["ph_corrected_from_phstd", "pH_corrected_from_std"],
+    )
+
+    df["ph_after_phstd_qc"] = empty_float_series(df.index)
+    df["ph_after_phstd_qc_source"] = empty_string_series(df.index)
+
+    if corrected_ph_col:
+        ph_after = pd.to_numeric(df[corrected_ph_col], errors="coerce").astype("Float64")
+        df["ph_after_phstd_qc"] = ph_after
+
+        if "phstd_correction_applied" in df.columns:
+            applied = _bool_series(df, "phstd_correction_applied", default=False)
+        else:
+            # Older files may have a corrected pH column but no correction flag.
+            # Treat non missing corrected values as unknown corrected provenance,
+            # not as a confirmed applied correction.
+            applied = pd.Series(False, index=df.index, dtype=bool)
+
+        has_ph_after = df["ph_after_phstd_qc"].notna()
+        df.loc[applied & has_ph_after, "ph_after_phstd_qc_source"] = "phstd_corrected"
+        df.loc[
+            ~applied & has_ph_after,
+            "ph_after_phstd_qc_source",
+        ] = "phstd_original_fallback"
+
     ph_candidates = existing_columns(df, config.get("ph_precedence", []))
     df["ph_best"], df["ph_best_source"] = coalesce_numeric_series(df, ph_candidates)
     meta["ph_precedence_used"] = ph_candidates
+
+    df["ph_best_correction_status_source"] = empty_string_series(df.index)
+    if "ph_after_phstd_qc_source" in df.columns:
+        from_ph_after = df["ph_best_source"].eq("ph_after_phstd_qc")
+        df.loc[
+            from_ph_after,
+            "ph_best_correction_status_source",
+        ] = df.loc[from_ph_after, "ph_after_phstd_qc_source"]
 
     ph_co2sys_col = first_existing(df, config.get("ph_co2sys_candidates", []))
     meta["ph_co2sys_source"] = ph_co2sys_col
@@ -474,8 +574,19 @@ def add_provenance_fields(
     df["ph_scale_calculated_source"] = ph_scale_calc_source
 
     defaults = config.get("provenance_defaults", {})
+
     for col, value in defaults.items():
-        df[col] = value
+        if col in {"carbonate_solver", "carbon_input_pair_used"}:
+            if col not in df.columns:
+                df[col] = pd.Series(pd.NA, index=df.index, dtype="string")
+            else:
+                df[col] = safe_str_series(df[col]).replace("", pd.NA)
+
+            if _scalar_default_has_value(value):
+                missing = df[col].isna()
+                df.loc[missing, col] = str(value)
+        else:
+            df[col] = value
 
     df["calc_temperature_c"] = empty_float_series(df.index)
     df["calc_temperature_source"] = empty_string_series(df.index)
@@ -531,6 +642,16 @@ def add_provenance_fields(
 
     meta["carbonate_solver"] = defaults.get("carbonate_solver")
     meta["carbon_input_pair_used"] = defaults.get("carbon_input_pair_used")
+    meta["carbonate_solver_existing_non_missing"] = (
+        int(_has_value(df["carbonate_solver"]).sum())
+        if "carbonate_solver" in df.columns
+        else 0
+    )
+    meta["carbon_input_pair_existing_non_missing"] = (
+        int(_has_value(df["carbon_input_pair_used"]).sum())
+        if "carbon_input_pair_used" in df.columns
+        else 0
+    )
     meta["calc_temperature_sources"] = (
         df["calc_temperature_source"].value_counts(dropna=False).to_dict()
         if "calc_temperature_source" in df.columns
@@ -571,7 +692,11 @@ def add_scale_flags(
     accepted_observed_scales: Optional[List[str]] = None,
 ) -> None:
     """Add pH scale missing and unexpected flags in place."""
-    accepted = set(accepted_observed_scales or ["total"])
+    accepted = {
+        normalize_ph_scale(x)
+        for x in (accepted_observed_scales or ["total"])
+    }
+    accepted = {x for x in accepted if pd.notna(x)}
 
     df["flag_ph_scale_observed_missing"] = (
         df["ph_best"].notna() & df["ph_scale_observed_normalized"].isna()
@@ -586,6 +711,7 @@ def add_scale_flags(
     df["flag_ph_scale_calculated_missing"] = (
         df["ph_co2sys"].notna() & df["ph_scale_calculated_normalized"].isna()
     ).astype("boolean")
+
 
 
 def add_presence_flags(df: pd.DataFrame) -> None:
@@ -730,7 +856,12 @@ def analysis_ready_subset(df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFr
 
     safe_qc = pd.Series(True, index=out.index, dtype=bool)
 
-    for status_col in ["ta_qc_status_norm", "ph_qc_status_norm"]:
+    required_status_cols = policy.get(
+        "required_qc_status_norm_columns",
+        ["ta_qc_status_norm"],
+    )
+
+    for status_col in required_status_cols:
         if status_col in out.columns:
             safe_qc &= _status_is_allowed(
                 out[status_col],
@@ -744,12 +875,28 @@ def analysis_ready_subset(df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFr
     if "phstd_status_norm" in out.columns:
         phstd_fail = safe_upper(out["phstd_status_norm"]).eq("FAIL").fillna(False)
 
-    corrected_sources = set(policy.get("corrected_ph_source_names", []))
-    ph_best_from_corrected = (
-        out["ph_best_source"].isin(corrected_sources)
-        if "ph_best_source" in out.columns
-        else pd.Series(False, index=out.index)
+    corrected_status_sources = set(
+        str(x)
+        for x in policy.get(
+            "corrected_ph_status_source_names",
+            ["phstd_corrected"],
+        )
     )
+
+    if "ph_best_correction_status_source" in out.columns:
+        ph_best_from_corrected = out["ph_best_correction_status_source"].isin(
+            corrected_status_sources
+        )
+    else:
+        # Backward compatible fallback for outputs created before the row level
+        # correction status column existed. This is less precise than the new
+        # ph_best_correction_status_source column.
+        corrected_sources = set(policy.get("corrected_ph_source_names", []))
+        ph_best_from_corrected = (
+            out["ph_best_source"].isin(corrected_sources)
+            if "ph_best_source" in out.columns
+            else pd.Series(False, index=out.index)
+        )
 
     out["phstd_fail_diagnostic"] = phstd_fail.astype("boolean")
     out["ph_best_from_corrected"] = ph_best_from_corrected.astype("boolean")
@@ -807,6 +954,7 @@ def provenance_counts_table(df: pd.DataFrame) -> pd.DataFrame:
         ("ta_best_source", "Best TA source"),
         ("ph_best", "Best observed pH"),
         ("ph_best_source", "Best observed pH source"),
+        ("ph_best_correction_status_source", "Best pH correction status source"),
         ("ph_co2sys", "Calculated pH"),
         ("pco2_best_uatm", "Best pCO2"),
         ("dic_best_umol_kg", "Best DIC"),
@@ -817,6 +965,8 @@ def provenance_counts_table(df: pd.DataFrame) -> pd.DataFrame:
         ("calc_temperature_source", "Calculation temperature source"),
         ("calc_salinity", "Calculation salinity"),
         ("calc_pressure_dbar", "Calculation pressure"),
+        ("carbonate_solver", "Carbonate solver"),
+        ("carbon_input_pair_used", "Carbonate input pair"),
     ]
 
     rows = []

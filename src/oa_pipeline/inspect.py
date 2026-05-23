@@ -57,11 +57,19 @@ def _require_inventory_columns(df: pd.DataFrame, required: set[str]) -> None:
 
 
 def _normalise_suffixes(suffixes: Optional[Iterable[str]]) -> Optional[set[str]]:
-    """Normalise suffix filters to lowercase dot-prefixed extensions."""
+    """Normalise suffix filters to lowercase dot-prefixed extensions.
+
+    A single string such as "csv" is treated as one suffix, not as an iterable
+    of characters.
+    """
     if suffixes is None:
         return None
 
+    if isinstance(suffixes, str):
+        suffixes = [suffixes]
+
     normalised: set[str] = set()
+
     for suffix in suffixes:
         text = str(suffix).strip().lower()
         if not text:
@@ -192,17 +200,24 @@ def get_image_files(df: pd.DataFrame) -> List[Path]:
 
 
 def preview_csv_table(path: Path, nrows: int = 10) -> pd.DataFrame:
-    """Read the first nrows of a CSV without loading the full file."""
+    """Read the first nrows of a delimited text table without loading all rows.
+
+    Supported extensions are .csv, .tsv, and .txt. For .tsv files the separator
+    is tab. For .csv and .txt files the separator is comma.
+    """
     path = Path(path).expanduser()
 
     if not path.exists():
-        die(f"CSV file not found: {path}")
+        die(f"Table file not found: {path}")
 
     if not path.is_file():
-        die(f"CSV path is not a file: {path}")
+        die(f"Table path is not a file: {path}")
 
-    if path.suffix.lower() != ".csv":
-        die(f"Expected a .csv file, got: {path}")
+    suffix = path.suffix.lower()
+    supported = {".csv", ".tsv", ".txt"}
+
+    if suffix not in supported:
+        die(f"Expected one of {sorted(supported)}, got: {path}")
 
     try:
         nrows_int = int(nrows)
@@ -213,10 +228,12 @@ def preview_csv_table(path: Path, nrows: int = 10) -> pd.DataFrame:
     if nrows_int < 1:
         die(f"nrows must be at least 1, got: {nrows}")
 
+    sep = "\t" if suffix == ".tsv" else ","
+
     try:
-        return pd.read_csv(path, nrows=nrows_int)
+        return pd.read_csv(path, nrows=nrows_int, sep=sep)
     except Exception as exc:
-        die(f"Could not read CSV preview from {path}: {exc}")
+        die(f"Could not read table preview from {path}: {exc}")
         return pd.DataFrame()  # unreachable
 
 
@@ -241,6 +258,17 @@ def show_image(
         )
 
     try:
+        width, height = figsize
+        width = float(width)
+        height = float(height)
+    except Exception:
+        die(f"figsize must be a two value tuple, got: {figsize!r}")
+        width = height = 0.0  # unreachable, keeps type checkers satisfied
+
+    if width <= 0 or height <= 0:
+        die(f"figsize values must be positive, got: {figsize!r}")
+
+    try:
         import matplotlib.image as mpimg
         import matplotlib.pyplot as plt
     except Exception as exc:  # pragma: no cover
@@ -251,7 +279,7 @@ def show_image(
     except Exception as exc:
         die(f"Could not read image file {path}: {exc}")
 
-    fig, ax = plt.subplots(figsize=figsize)
+    fig, ax = plt.subplots(figsize=(width, height))
     ax.imshow(img)
     ax.axis("off")
 
