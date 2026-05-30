@@ -127,13 +127,18 @@ oa_pipeline/
 │
 ├── README.md
 ├── CONTRIBUTING.md
+├── DATA_DICTIONARY.md        # input contract: columns, values, units, tags
+├── APP_README.md             # how to use the desktop launcher
 ├── LICENSE
 ├── pyproject.toml
 ├── requirements.txt
 ├── run_pipeline.sh
+├── oa_pipeline_app.py        # desktop GUI launcher (Tkinter)
+├── oa_pipeline_app_core.py   # GUI-independent launcher logic
 ├── .gitignore
 │
 ├── configs/
+│   ├── crm_certified_values.yaml
 │   ├── cruise_grade_thresholds.yaml
 │   └── regional.yaml
 │
@@ -174,10 +179,19 @@ oa_pipeline/
 ├── tests/
 │   ├── __init__.py
 │   ├── conftest.py
+│   ├── test_app_core.py
 │   ├── test_coalesce.py
+│   ├── test_common.py
+│   ├── test_inspect.py
 │   ├── test_pipeline_e2e.py
+│   ├── test_policy.py
+│   ├── test_qc_ta_ph.py
 │   ├── test_readiness.py
-│   └── test_schema.py
+│   ├── test_schema.py
+│   ├── test_stage1b.py
+│   ├── test_stage2.py
+│   ├── test_stage3.py
+│   └── test_stage4.py
 │
 ├── outputs/
 └── runs/
@@ -270,7 +284,23 @@ configs/regional.yaml
 
 ---
 
-## Two ways to run
+## Preparing your input workbook
+
+Before running on real data, read [`DATA_DICTIONARY.md`](DATA_DICTIONARY.md).
+It documents the full input contract directly from the code: accepted
+column-header spellings (the alias map), accepted values for pH scales and
+units, expected data types, plausible-range bounds, and the required
+columns.
+
+The most common and most costly mistake it prevents: **CRM and pH-standard
+rows are detected by their `sample_tag` prefix (`RM...`, `tris...`), not
+primarily by the `sample_type` column.** A row labelled `crm` in the
+`sample_type` column but named `Batch213_1` is treated as an ordinary
+sample by default, which silently corrupts the TA correction and the QC
+plots. Tag CRM rows `RM<batch>_<n>` (e.g. `RM213_1`) and standards
+`tris_*`.
+
+## Three ways to run
 
 ### Full command line run
 
@@ -289,6 +319,21 @@ Useful options:
 ```
 
 Partial reruns require the earlier stage outputs to already exist inside the same `OUTPUT_ROOT`.
+
+### Desktop app (no terminal)
+
+For users who would rather not use a shell, a point-and-click launcher is
+included. From the project root:
+
+```bash
+python oa_pipeline_app.py
+```
+
+Pick the input workbook, pick an output folder, click **Run pipeline**, and
+watch progress; it prints the final PASS / REVIEW / FAIL counts when done.
+It runs the same `run_pipeline.sh`, so results are identical. The launcher
+window needs only standard-library Tkinter (bundled with the python.org
+installer). See [`APP_README.md`](APP_README.md) for setup details.
 
 ### Interactive notebook run
 
@@ -367,11 +412,16 @@ python -m pytest -q
 
 The suite includes unit tests for schema resolution, coalescing, readiness classification, and a full Papermill end to end test over the bundled example workbook.
 
-At the latest stable checkpoint, the test suite reported:
+At the latest checkpoint, after the data-integrity audit and the addition
+of the input data dictionary and the desktop launcher, the test suite
+reported:
 
 ```text
-108 passed
+213 passed
 ```
+
+This includes 187 unit tests, 19 Papermill end-to-end tests, and 7 tests
+for the desktop launcher logic (`tests/test_app_core.py`).
 
 Use these targeted commands while debugging:
 
@@ -437,7 +487,7 @@ The integration test asserts that these rows produce the expected status and rea
 | Change Stage 3 DIC or pH diagnostic tolerance | `oa_pipeline.stage3.STAGE3_DEFAULTS["thresholds"]` |
 | Change Stage 4 strict DIC audit tolerance | `oa_pipeline.stage4.STAGE4_DEFAULTS["dic_species_audit"]` |
 | Change Stage 4 PASS / REVIEW / FAIL severity | `oa_pipeline.stage4.add_readiness_status` |
-| Add a new CRM certified TA value | `oa_pipeline.qc_ta_ph.CRM_CERTIFIED_TA` |
+| Add a new CRM certified TA value | `configs/crm_certified_values.yaml` (authoritative, NOAA-sourced). The in-code fallback in `oa_pipeline.qc_ta_ph` is corrected but secondary. |
 | Change output wiring | `run_pipeline.sh` and the relevant notebook parameters cell |
 
 ---

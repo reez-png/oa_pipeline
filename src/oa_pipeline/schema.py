@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
@@ -27,6 +27,7 @@ __all__ = [
     "DEFAULT_CONFIG",
     "load_schema_config",
     "load_config",
+    "assert_ph_scale_consistency",
     "normalize_ta_units",
     "normalize_ph_scale",
     "normalize_carbonate_unit",
@@ -350,8 +351,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "flag_pressure_output_dbar_missing",
     ],
     "provenance_defaults": {
-        "carbonate_solver": pd.NA,
-        "carbon_input_pair_used": pd.NA,
+        # FIX 2-A: Use None instead of pd.NA here. pd.NA is not JSON-serialisable
+        # and write_json() (via default=str) silently converts it to the string
+        # "<NA>", which is then treated as a real value when manifests are read
+        # back. None serialises to JSON null cleanly. apply_canonical_schema()
+        # converts None → pd.NA when filling DataFrame columns so dtype is
+        # preserved inside the DataFrame.
+        "carbonate_solver": None,
+        "carbon_input_pair_used": None,
         "preferred_ta_for_analysis": "ta_umol_kg",
         "preferred_ph_for_analysis": "ph_observed",
         "preferred_pco2_for_analysis": "pco2_calc_uatm",
@@ -383,30 +390,88 @@ def load_schema_config(config_path: Optional[str]) -> Tuple[Dict[str, Any], Opti
 load_config = load_schema_config
 
 
+def assert_ph_scale_consistency(
+    *scale_lists: Optional[Any],
+    source_names: Optional[Sequence[str]] = None,
+) -> List[str]:
+    """Fail loudly if the accepted-pH-scale lists from several configs disagree.
+
+    AUDIT FIX N-6: The accepted-pH-scale invariant (e.g. ["total"]) is declared
+    independently in three places — schema.DEFAULT_CONFIG["accepted_ph_scales"],
+    cruise_grade_thresholds.yaml, and regional.yaml — and was previously kept in
+    sync only by hand-maintained "X-2 sync" comments. Mixing pH scales without a
+    documented conversion corrupts every downstream carbonate-system calculation
+    (Moras et al. 2023, L&O Methods 21). This helper turns the comment-based
+    contract into an enforced startup check.
+
+    Each argument is an iterable of scale labels (or None to skip that source).
+    Labels are normalised with normalize_ph_scale before comparison, so "Total"
+    and "total" are treated as equal. Raises via die() on any disagreement and
+    returns the agreed, normalised, sorted list on success.
+    """
+    names = list(source_names) if source_names else [
+        f"source_{i + 1}" for i in range(len(scale_lists))
+    ]
+
+    normalised_sets: List[Tuple[str, frozenset]] = []
+    for name, scales in zip(names, scale_lists):
+        if scales is None:
+            continue
+        labels = {
+            normalize_ph_scale(s)
+            for s in scales
+            if s is not None and str(s).strip() != ""
+        }
+        labels = {str(x) for x in labels if pd.notna(x)}
+        normalised_sets.append((name, frozenset(labels)))
+
+    if not normalised_sets:
+        return []
+
+    reference = normalised_sets[0][1]
+    disagreements = [
+        (name, sorted(s)) for name, s in normalised_sets if s != reference
+    ]
+
+    if disagreements:
+        detail = "; ".join(
+            f"{name}={scales}" for name, scales in
+            [(n, sorted(s)) for n, s in normalised_sets]
+        )
+        die(
+            "Accepted pH-scale configuration disagrees across sources. "
+            "These must match exactly because mixing pH scales without a "
+            "documented conversion corrupts carbonate-system calculations. "
+            f"Found: {detail}. Reconcile schema DEFAULT_CONFIG, "
+            "cruise_grade_thresholds.yaml, and regional.yaml."
+        )
+
+    return sorted(reference)
+
+
 # =============================================================================
 # Value normalisers
 # =============================================================================
 
 
-def normalize_ta_units(value: Any) -> Any:
-    """Canonicalise a TA unit string to 'umol kg-1' where possible."""
-    if pd.isna(value):
-        return pd.NA
+def _prepare_unit_key(original: str) -> str:
+    """Shared Unicode normalisation and key construction for unit strings.
 
-    original = str(value).strip()
-
+    FIX 2-C: Extracted from normalize_ta_units and normalize_carbonate_unit
+    to eliminate copy-paste logic. Any future unit variant additions only need
+    to be made in one place.
+    """
     text = (
         original
         .replace("\u00b5", "U")
         .replace("\u03bc", "U")
         .replace("\u039c", "U")
-        .replace("−", "-")
-        .replace("–", "-")
-        .replace("—", "-")
-        .replace("⁻", "-")
-        .replace("¹", "1")
+        .replace("\u2212", "-")   # MINUS SIGN
+        .replace("\u2013", "-")   # EN DASH
+        .replace("\u2014", "-")   # EM DASH
+        .replace("\u207b", "-")   # SUPERSCRIPT MINUS
+        .replace("\u00b9", "1")   # SUPERSCRIPT ONE
     )
-
     key = (
         text.upper()
         .replace("MICROMOL", "UMOL")
@@ -415,11 +480,20 @@ def normalize_ta_units(value: Any) -> Any:
         .replace("_", "")
         .replace(".", "")
     )
-
     key = key.replace("KGSW", "KG")
     key = key.replace("KG-SW", "KG")
     key = key.replace("KG-SEAWATER", "KG")
     key = key.replace("/KGSEAWATER", "/KG")
+    return key
+
+
+def normalize_ta_units(value: Any) -> Any:
+    """Canonicalise a TA unit string to 'umol kg-1' where possible."""
+    if pd.isna(value):
+        return pd.NA
+
+    original = str(value).strip()
+    key = _prepare_unit_key(original)
 
     accepted = {
         "UMOL/KG",
@@ -478,37 +552,15 @@ def normalize_carbonate_unit(value: Any) -> Any:
     Equivalent micromol per kg spellings are normalised to "umol kg-1" so
     DIC/species unit comparisons do not falsely fail because of micro symbols,
     spacing, slash notation, or minus sign variants.
+
+    FIX 2-C: Refactored to use shared _prepare_unit_key() helper instead of
+    duplicating the Unicode substitution and key construction logic.
     """
     if pd.isna(value):
         return pd.NA
 
     original = str(value).strip()
-
-    text = (
-        original
-        .replace("\u00b5", "U")
-        .replace("\u03bc", "U")
-        .replace("\u039c", "U")
-        .replace("−", "-")
-        .replace("–", "-")
-        .replace("—", "-")
-        .replace("⁻", "-")
-        .replace("¹", "1")
-    )
-
-    key = (
-        text.upper()
-        .replace("MICROMOL", "UMOL")
-        .replace("MICRO MOL", "UMOL")
-        .replace(" ", "")
-        .replace("_", "")
-        .replace(".", "")
-    )
-
-    key = key.replace("KGSW", "KG")
-    key = key.replace("KG-SW", "KG")
-    key = key.replace("KG-SEAWATER", "KG")
-    key = key.replace("/KGSEAWATER", "/KG")
+    key = _prepare_unit_key(original)
 
     accepted = {
         "UMOL/KG",
@@ -532,10 +584,14 @@ def normalize_carbonate_unit(value: Any) -> Any:
 
 
 def _series_has_value(s: pd.Series) -> pd.Series:
-    """Return True where a Series has a non missing, non blank value."""
+    """Return True where a Series has a non missing, non blank value.
+
+    FIX 1-A (schema.py copy): Use text.notna() instead of s.notna() in the
+    string branch — consistent with the fix applied to common.has_value_series.
+    """
     if pd.api.types.is_string_dtype(s) or s.dtype == object:
-        as_text = s.astype("string")
-        return s.notna() & as_text.str.strip().ne("").fillna(False)
+        as_text = s.astype("string").str.strip()
+        return as_text.notna() & as_text.ne("")
     return s.notna()
 
 
@@ -779,10 +835,13 @@ def apply_canonical_schema(
         out["ph_scale_calculated"] = out["ph_scale_calculated"].map(normalize_ph_scale)
 
     for col, default_value in config.get("provenance_defaults", {}).items():
+        # FIX 2-A: config stores None for "no default"; convert to pd.NA so
+        # DataFrame columns get the correct nullable sentinel, not the string "None".
+        df_default = pd.NA if default_value is None else default_value
         if col not in out.columns:
-            out[col] = default_value
+            out[col] = df_default
         else:
-            out[col] = out[col].where(out[col].notna(), default_value)
+            out[col] = out[col].where(out[col].notna(), df_default)
 
     role_defaults = {
         "ta_umol_kg_role": ("ta_umol_kg", "measured"),
@@ -884,8 +943,15 @@ def add_canonical_presence_flags(df: pd.DataFrame, config: Dict[str, Any]) -> No
 
     if "ta_units" in df.columns:
         df["flag_ta_units_missing"] = (~_series_has_value(df["ta_units"])).astype("boolean")
+        # FIX 2-D: normalise the raw ta_units value before comparing to the
+        # canonical string "umol kg-1". The previous code compared the raw
+        # input directly, so a legitimate variant such as "umol/kg" would fire
+        # this flag even though it would normalise correctly in Stage 1B,
+        # causing Stage 1A and Stage 1B to report different flag counts for
+        # the same data.
+        normalised_ta_units = df["ta_units"].map(normalize_ta_units)
         df["flag_ta_units_unexpected"] = (
-            _series_has_value(df["ta_units"]) & (df["ta_units"] != "umol kg-1")
+            _series_has_value(df["ta_units"]) & (normalised_ta_units != "umol kg-1")
         ).astype("boolean")
     else:
         df["flag_ta_units_missing"] = pd.Series(True, index=df.index, dtype="boolean")

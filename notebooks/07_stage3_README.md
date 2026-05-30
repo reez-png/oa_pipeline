@@ -1,5 +1,17 @@
 # Notebook 07 — Stage 3: carbonate-system integrity checks
 
+> **Module-name note (post-audit):** This README predates the packaging of the
+> helpers into the installable `oa_pipeline` package. Where the text refers to
+> flat module names, the real import paths are:
+> `oa_common.py` → `oa_pipeline/common.py`,
+> `oa_qc_ta_ph.py` → `oa_pipeline/qc_ta_ph.py`,
+> `oa_schema.py` → `oa_pipeline/schema.py`,
+> `oa_policy.py` → `oa_pipeline/policy.py`,
+> `oa_stage1b.py`/`oa_stage2.py`/`oa_stage3.py`/`oa_stage4.py` → `oa_pipeline/stage1b.py` … `stage4.py`,
+> `oa_inspect.py` → `oa_pipeline/inspect.py`.
+> The notebook code cells already use the correct `from oa_pipeline.<module> import ...` form.
+
+
 Seventh notebook of the split. **First stage with scientific QC** —
 not data-engineering QC. Reads Stage 2's `enhanced.csv` and runs
 row-wise internal-consistency checks of the carbonate chemistry: does
@@ -159,6 +171,7 @@ papermill 07_stage3.ipynb runs/07_stage3.run.ipynb \
 | 8 | **`first_existing` extended in `oa_common.py`** to try alphanumeric-canonical matches (`"ph_co2sys"` → `"pH co2 sys"`). | Stage 3's `_canon` helper did this canonicalisation locally. Promoting it to `oa_common` means every stage gets the more-forgiving matching. No backwards-compatibility risk: finds more, never fewer. |
 | 9 | `write_report` is now inline in the notebook (not a separate function). | The original had three `write_report` functions, one in each of Stages 2, 3, 4, with different signatures. Inlining the per-stage markdown removes the silent-overwrite hazard. |
 | 10 | Output filenames are short: `enhanced.csv`, `carbonate_integrity_flags.csv`, etc. | JWST-style; same convention as Stages 02 / 04 / 05 / 06. |
+| 11 | **Audit fix N-6:** the notebook now calls `assert_ph_scale_consistency(...)` (from `oa_pipeline.schema`) on the `accepted_ph_scales` it reads, checking it against the schema default before any pH integrity check runs. | The accepted-pH-scale invariant was previously declared independently in the schema, `cruise_grade_thresholds.yaml`, and `regional.yaml`, kept aligned only by hand-maintained "sync" comments. Mixing pH scales without a documented conversion corrupts carbonate-system calculations (Moras et al. 2023). The check turns that comment-only contract into an enforced guard that stops the run on disagreement. |
 
 ---
 

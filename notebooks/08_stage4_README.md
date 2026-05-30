@@ -1,5 +1,17 @@
 # Notebook 08 — Stage 4: analysis audit + PASS/REVIEW/FAIL verdict
 
+> **Module-name note (post-audit):** This README predates the packaging of the
+> helpers into the installable `oa_pipeline` package. Where the text refers to
+> flat module names, the real import paths are:
+> `oa_common.py` → `oa_pipeline/common.py`,
+> `oa_qc_ta_ph.py` → `oa_pipeline/qc_ta_ph.py`,
+> `oa_schema.py` → `oa_pipeline/schema.py`,
+> `oa_policy.py` → `oa_pipeline/policy.py`,
+> `oa_stage1b.py`/`oa_stage2.py`/`oa_stage3.py`/`oa_stage4.py` → `oa_pipeline/stage1b.py` … `stage4.py`,
+> `oa_inspect.py` → `oa_pipeline/inspect.py`.
+> The notebook code cells already use the correct `from oa_pipeline.<module> import ...` form.
+
+
 **Eighth and final notebook of the split.** Reads Stage 3's `enhanced.csv`
 and produces the analysis-ready CSV plus a per-row **verdict**
 (`analysis_audit_status` = PASS / REVIEW / FAIL) with explicit reason

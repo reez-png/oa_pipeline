@@ -186,6 +186,23 @@ should_run() {
     [[ "$idx" -ge "$START_IDX" ]]
 }
 
+# AUDIT FIX N-5: Warn when --start-from skips Stage 2 (06). Stage 4 (08)
+# requires the depth_round_m key column, which is normally produced by Stage 2.
+# A direct jump to Stage 4 relies on Stage 4's depth_round_m fallback (FIX 8-B),
+# which derives a coarse key from depth_m. That fallback keeps the run from
+# marking every row FAIL, but it is NOT a substitute for Stage 2's proper depth
+# binning. Make this explicit so operators do not silently ship coarsely-keyed
+# data. Stage 2 index is 6; warn if we start at or after Stage 3 (07).
+STAGE2_IDX="$(stage_index 06)"
+if [[ "$START_IDX" -gt "$STAGE2_IDX" ]]; then
+    echo "WARNING: --start-from $START_FROM skips Stage 2 (06_stage2)." >&2
+    echo "         Stage 4 needs depth_round_m, normally created by Stage 2." >&2
+    echo "         Stage 4's depth_round_m fallback (derived from depth_m) will" >&2
+    echo "         be used if the upstream input lacks it. This avoids a total" >&2
+    echo "         FAIL but does not replace Stage 2's depth binning. Re-run" >&2
+    echo "         from Stage 2 for proper depth keys before final delivery." >&2
+fi
+
 # ---------------------------------------------------------------------
 # Path resolution
 # ---------------------------------------------------------------------

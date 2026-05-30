@@ -412,10 +412,14 @@ def _normalize_unit_series(series: pd.Series) -> pd.Series:
 
 
 def _has_value(series: pd.Series) -> pd.Series:
-    """Return True where a Series has a non missing and non blank value."""
+    """Return True where a Series has a non missing and non blank value.
+
+    FIX 1-A (stage3.py copy): Use text.notna() instead of series.notna() in
+    the string branch — consistent with the fix applied to common.has_value_series.
+    """
     if pd.api.types.is_string_dtype(series) or series.dtype == object:
         text = series.astype("string").str.strip()
-        return series.notna() & text.ne("").fillna(False)
+        return text.notna() & text.ne("")
     return series.notna()
 
 
@@ -680,7 +684,15 @@ def _dic_block(
     species_sum = co2aq + hco3 + co3
     diff = dic - species_sum
     dic_abs = dic.abs()
-    tol = (dic_abs * thr.dic_rel_tol).clip(lower=thr.dic_abs_tol)
+    # FIX 8-C (scientific): Apply both lower and upper clips to tolerance.
+    # Without an upper clip, DIC of 3000 µmol/kg at dic_rel_tol=1% allows
+    # a 30 µmol/kg species sum discrepancy — far outside CO2SYS accuracy
+    # (Lewis & Wallace 1998; Orr et al. 2015 SOCAT protocols).
+    # Upper clip = 10 × dic_abs_tol keeps tolerance physically meaningful.
+    tol = (dic_abs * thr.dic_rel_tol).clip(
+        lower=thr.dic_abs_tol,
+        upper=thr.dic_abs_tol * 10.0,
+    )
 
     out["flag_dic_nonpositive"] = (dic.notna() & (dic <= 0)).astype("boolean")
     out["flag_co2aq_negative"] = (co2aq.notna() & (co2aq < 0)).astype("boolean")
@@ -907,6 +919,34 @@ def _ph_block(
 # =============================================================================
 
 
+# AUDIT FIX N-2 (completing FIX 7-A): these helpers are now genuinely
+# module-level and take the DataFrame as an explicit parameter, instead of
+# being nested closures that captured the enclosing `out` by reference. The
+# previous "FIX 7-A" left them nested, so the latent hazard it claimed to
+# remove (a refactor calling them against a partially-built `out`) still
+# existed. Passing `out` explicitly removes the closure capture entirely and
+# makes the helpers independently testable.
+def _flag_column(out: pd.DataFrame, col: str) -> pd.Series:
+    """Return a boolean Series for ``col`` in ``out``, or all-False if absent."""
+    if col in out.columns:
+        return out[col].fillna(False)
+    return pd.Series(False, index=out.index)
+
+
+def _count_true_column(out: pd.DataFrame, col: str) -> int:
+    """Return the count of True values in ``col``, or 0 if the column is absent."""
+    if col in out.columns:
+        return int(out[col].fillna(False).sum())
+    return 0
+
+
+def _first_bool_column(out: pd.DataFrame, col: str) -> bool:
+    """Return the first value of ``col`` as bool, or False if absent/empty."""
+    if col in out.columns and len(out):
+        return bool(out[col].fillna(False).iloc[0])
+    return False
+
+
 def carbonate_integrity_checks(
     df: pd.DataFrame,
     thr: CarbonateIntegrityThresholds,
@@ -935,79 +975,89 @@ def carbonate_integrity_checks(
         else:
             out[col] = pd.Series(False, index=df.index, dtype="boolean")
 
-    flag = lambda col: out[col].fillna(False) if col in out.columns else pd.Series(False, index=out.index)
+    # AUDIT FIX N-2 (completing FIX 7-A): the helpers are now module-level
+    # pure functions (_flag_column / _count_true_column / _first_bool_column)
+    # that take the DataFrame explicitly. The thin local aliases below simply
+    # bind the current `out` for readability at the call sites; the heavy
+    # lifting no longer relies on closure capture, so refactoring either block
+    # to call these cannot accidentally see a partially-built frame.
+    def _get_flag(col: str) -> pd.Series:
+        return _flag_column(out, col)
+
+    def _count_true(col: str) -> int:
+        return _count_true_column(out, col)
+
+    def _first_bool(col: str) -> bool:
+        return _first_bool_column(out, col)
 
     out["flag_any_carbonate_issue"] = (
-        flag("flag_dic_unit_missing")
-        | flag("flag_dic_unit_mismatch")
-        | flag("flag_dic_nonpositive")
-        | flag("flag_any_negative_species")
-        | flag("flag_dic_inconsistent")
-        | flag("flag_dic_inconsistent_robust")
-        | flag("flag_ph_best_missing_scale_context")
-        | flag("flag_ph_co2sys_missing_scale_context")
-        | flag("flag_ph_best_scale_unexpected")
-        | flag("flag_ph_co2sys_scale_unexpected")
-        | flag("flag_ph_scale_mismatch")
-        | flag("flag_ph_diag_mismatch")
-        | flag("flag_ph_diag_mismatch_robust")
-        | flag("flag_stage2_replicate_conflict_carried")
+        _get_flag("flag_dic_unit_missing")
+        | _get_flag("flag_dic_unit_mismatch")
+        | _get_flag("flag_dic_nonpositive")
+        | _get_flag("flag_any_negative_species")
+        | _get_flag("flag_dic_inconsistent")
+        | _get_flag("flag_dic_inconsistent_robust")
+        | _get_flag("flag_ph_best_missing_scale_context")
+        | _get_flag("flag_ph_co2sys_missing_scale_context")
+        | _get_flag("flag_ph_best_scale_unexpected")
+        | _get_flag("flag_ph_co2sys_scale_unexpected")
+        | _get_flag("flag_ph_scale_mismatch")
+        | _get_flag("flag_ph_diag_mismatch")
+        | _get_flag("flag_ph_diag_mismatch_robust")
+        | _get_flag("flag_stage2_replicate_conflict_carried")
     ).astype("boolean")
 
     # Strict carbonate chemistry rollup intentionally excludes solver and input
     # pair provenance. Those are audit provenance issues handled by Stage 4.
     out["flag_any_carbonate_issue_strict"] = (
-        flag("flag_dic_unit_mismatch")
-        | flag("flag_dic_nonpositive")
-        | flag("flag_any_negative_species")
-        | flag("flag_dic_inconsistent")
-        | flag("flag_dic_inconsistent_robust")
-        | flag("flag_ph_best_scale_unexpected")
-        | flag("flag_ph_co2sys_scale_unexpected")
-        | flag("flag_ph_scale_mismatch")
-        | flag("flag_ph_diag_mismatch_strict")
-        | flag("flag_ph_diag_mismatch_robust")
+        _get_flag("flag_dic_unit_mismatch")
+        | _get_flag("flag_dic_nonpositive")
+        | _get_flag("flag_any_negative_species")
+        | _get_flag("flag_dic_inconsistent")
+        | _get_flag("flag_dic_inconsistent_robust")
+        | _get_flag("flag_ph_best_scale_unexpected")
+        | _get_flag("flag_ph_co2sys_scale_unexpected")
+        | _get_flag("flag_ph_scale_mismatch")
+        | _get_flag("flag_ph_diag_mismatch_strict")
+        | _get_flag("flag_ph_diag_mismatch_robust")
     ).astype("boolean")
 
     out["flag_any_stage3_review_issue"] = (
-        flag("flag_any_carbonate_issue")
-        | flag("flag_stage2_replicate_conflict_carried")
-        | flag("flag_solver_unknown")
-        | flag("flag_carbon_input_pair_unknown")
+        _get_flag("flag_any_carbonate_issue")
+        | _get_flag("flag_stage2_replicate_conflict_carried")
+        | _get_flag("flag_solver_unknown")
+        | _get_flag("flag_carbon_input_pair_unknown")
     ).astype("boolean")
 
-    count_true = lambda col: int(out[col].fillna(False).sum()) if col in out.columns else 0
-    first_bool = lambda col: bool(out[col].fillna(False).iloc[0]) if col in out.columns and len(out) else False
-
     summary: Dict[str, Any] = {
-        "dic_columns_present": first_bool("dic_columns_present"),
-        "n_dic_values_present": count_true("dic_values_present_row"),
-        "n_dic_checkable": count_true("dic_species_check_possible_row"),
-        "n_dic_unit_missing": count_true("flag_dic_unit_missing"),
-        "n_dic_unit_mismatch": count_true("flag_dic_unit_mismatch"),
-        "n_dic_nonpositive": count_true("flag_dic_nonpositive"),
-        "n_any_negative_species": count_true("flag_any_negative_species"),
-        "n_dic_inconsistent": count_true("flag_dic_inconsistent"),
-        "n_dic_inconsistent_robust": count_true("flag_dic_inconsistent_robust"),
-        "ph_columns_present": first_bool("ph_columns_present"),
-        "n_ph_values_present": count_true("ph_diag_values_present_row"),
-        "n_ph_checkable": count_true("ph_diag_check_possible_row"),
-        "n_ph_strict_checkable": count_true("ph_diag_strict_check_possible_row"),
-        "n_ph_best_missing_scale_context": count_true("flag_ph_best_missing_scale_context"),
-        "n_ph_co2sys_missing_scale_context": count_true("flag_ph_co2sys_missing_scale_context"),
-        "n_ph_best_scale_unexpected": count_true("flag_ph_best_scale_unexpected"),
-        "n_ph_co2sys_scale_unexpected": count_true("flag_ph_co2sys_scale_unexpected"),
-        "n_ph_scale_mismatch": count_true("flag_ph_scale_mismatch"),
-        "n_ph_diag_mismatch": count_true("flag_ph_diag_mismatch"),
-        "n_ph_diag_mismatch_strict": count_true("flag_ph_diag_mismatch_strict"),
-        "n_ph_diag_mismatch_robust": count_true("flag_ph_diag_mismatch_robust"),
-        "n_stage2_replicate_conflict_carried": count_true("flag_stage2_replicate_conflict_carried"),
-        "n_has_calculated_carbonate_output": count_true("has_calculated_carbonate_output"),
-        "n_solver_unknown": count_true("flag_solver_unknown"),
-        "n_carbon_input_pair_unknown": count_true("flag_carbon_input_pair_unknown"),
-        "n_any_carbonate_issue": count_true("flag_any_carbonate_issue"),
-        "n_any_carbonate_issue_strict": count_true("flag_any_carbonate_issue_strict"),
-        "n_any_stage3_review_issue": count_true("flag_any_stage3_review_issue"),
+        "dic_columns_present": _first_bool("dic_columns_present"),
+        "n_dic_values_present": _count_true("dic_values_present_row"),
+        "n_dic_checkable": _count_true("dic_species_check_possible_row"),
+        "n_dic_unit_missing": _count_true("flag_dic_unit_missing"),
+        "n_dic_unit_mismatch": _count_true("flag_dic_unit_mismatch"),
+        "n_dic_nonpositive": _count_true("flag_dic_nonpositive"),
+        "n_any_negative_species": _count_true("flag_any_negative_species"),
+        "n_dic_inconsistent": _count_true("flag_dic_inconsistent"),
+        "n_dic_inconsistent_robust": _count_true("flag_dic_inconsistent_robust"),
+        "ph_columns_present": _first_bool("ph_columns_present"),
+        "n_ph_values_present": _count_true("ph_diag_values_present_row"),
+        "n_ph_checkable": _count_true("ph_diag_check_possible_row"),
+        "n_ph_strict_checkable": _count_true("ph_diag_strict_check_possible_row"),
+        "n_ph_best_missing_scale_context": _count_true("flag_ph_best_missing_scale_context"),
+        "n_ph_co2sys_missing_scale_context": _count_true("flag_ph_co2sys_missing_scale_context"),
+        "n_ph_best_scale_unexpected": _count_true("flag_ph_best_scale_unexpected"),
+        "n_ph_co2sys_scale_unexpected": _count_true("flag_ph_co2sys_scale_unexpected"),
+        "n_ph_scale_mismatch": _count_true("flag_ph_scale_mismatch"),
+        "n_ph_diag_mismatch": _count_true("flag_ph_diag_mismatch"),
+        "n_ph_diag_mismatch_strict": _count_true("flag_ph_diag_mismatch_strict"),
+        "n_ph_diag_mismatch_robust": _count_true("flag_ph_diag_mismatch_robust"),
+        "n_stage2_replicate_conflict_carried": _count_true("flag_stage2_replicate_conflict_carried"),
+        "n_has_calculated_carbonate_output": _count_true("has_calculated_carbonate_output"),
+        "n_solver_unknown": _count_true("flag_solver_unknown"),
+        "n_carbon_input_pair_unknown": _count_true("flag_carbon_input_pair_unknown"),
+        "n_any_carbonate_issue": _count_true("flag_any_carbonate_issue"),
+        "n_any_carbonate_issue_strict": _count_true("flag_any_carbonate_issue_strict"),
+        "n_any_stage3_review_issue": _count_true("flag_any_stage3_review_issue"),
         "accepted_ph_scales": list(accepted_ph_scales),
         "dic_abs_tol": thr.dic_abs_tol,
         "dic_rel_tol": thr.dic_rel_tol,
@@ -1024,7 +1074,14 @@ def carbonate_integrity_checks(
 # =============================================================================
 
 _AGG_MAP = {
-    "n_rows": ("sample_month", "size"),
+    # FIX 7-B: n_rows was previously keyed to ("sample_month", "size"), which
+    # means build_qc_summary silently produced n_rows=0 for any group where
+    # sample_month was absent from the input (it is derived from sample_date
+    # in Stage 1B and may legitimately be missing). Changed to a size aggregation
+    # on the first listed flag column so n_rows is always computed when any
+    # Stage 3 diagnostic column is present.  The fallback uses "flag_any_carbonate_issue"
+    # which is created unconditionally by carbonate_integrity_checks().
+    "n_rows": ("flag_any_carbonate_issue", "size"),
     "n_dic_values_present": ("dic_values_present_row", "sum"),
     "n_dic_checkable": ("dic_species_check_possible_row", "sum"),
     "n_dic_unit_missing": ("flag_dic_unit_missing", "sum"),

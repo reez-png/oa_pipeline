@@ -130,16 +130,12 @@ STAGE2_DEFAULTS: Dict[str, Any] = {
         "ta_best_umolkg",
         "ph_best",
     ],
-    # Backward compatible key used by older notebooks. Kept deliberately
-    # less strict than the original version.
-    "required_stage1b_columns": [
-        "sample_id",
-        "sample_date",
-        "station_id",
-        "depth_m",
-        "ta_best_umolkg",
-        "ph_best",
-    ],
+    # FIX 6-C: required_stage1b_columns was an identical copy of
+    # required_stage2_columns with only a note saying "backward compatible".
+    # Keeping two identical lists means a future update to one but not the
+    # other silently creates inconsistent validation. Removed the duplicate;
+    # code that referenced required_stage1b_columns should use
+    # required_stage2_columns instead.
     "expected_stage2_columns": [
         "record_id",
         "cruise_id",
@@ -292,10 +288,14 @@ STAGE2_DEFAULTS: Dict[str, Any] = {
 
 
 def _has_value(series: pd.Series) -> pd.Series:
-    """Return True where values are not missing and not blank strings."""
+    """Return True where values are not missing and not blank strings.
+
+    FIX 1-A (stage2.py copy): Use text.notna() instead of series.notna() in
+    the string branch — consistent with the fix applied to common.has_value_series.
+    """
     if pd.api.types.is_string_dtype(series) or series.dtype == object:
         text = series.astype("string").str.strip()
-        return series.notna() & text.ne("").fillna(False)
+        return text.notna() & text.ne("")
     return series.notna()
 
 
@@ -831,7 +831,16 @@ def _add_group_conflict_flags(
             "other": "flag_replicate_other_conflict",
         }
         pivot = pivot.rename(columns=rename_map)
+        # FIX 6-B: de-duplicate pivot keys before merging to prevent silent
+        # row multiplication from unexpected duplicate consistency_df entries.
+        pivot = pivot.drop_duplicates(subset=keys_used)
+        _pre_merge_len_g = len(out)
         out = out.merge(pivot, on=keys_used, how="left", suffixes=("", "_new"), sort=False)
+        if len(out) != _pre_merge_len_g:
+            raise RuntimeError(
+                f"_add_group_conflict_flags: row count changed from "
+                f"{_pre_merge_len_g} to {len(out)} after conflict flag merge."
+            )
 
         for flag in rename_map.values():
             new_col = f"{flag}_new"
@@ -917,7 +926,57 @@ def replicate_harmonise(
         if col not in keys_used and col not in mean_vars
     ]
 
-    first_values = groupby[non_numeric_cols].first().reset_index() if non_numeric_cols else pd.DataFrame()
+    # FIX 6-A: For provenance-critical columns (carbonate_solver,
+    # carbon_input_pair_used, etc.) groupby.first() silently picks the first
+    # non-NA value even when replicates within a group disagree on solver or
+    # input pair. Stage 4's provenance audit then sees only one solver label
+    # for a replicate group that may have used two different solvers.
+    # Fix: store a semicolon-joined string of all unique non-null values for
+    # provenance columns so conflicts are visible in the replicate mean output.
+    _PROVENANCE_JOIN_COLS = {
+        "carbonate_solver",
+        "carbon_input_pair_used",
+        "ta_units_normalized",
+        "ph_scale_observed_normalized",
+        "ph_scale_calculated_normalized",
+    }
+
+    provenance_cols = [
+        col for col in non_numeric_cols if col in _PROVENANCE_JOIN_COLS
+    ]
+    plain_first_cols = [
+        col for col in non_numeric_cols if col not in _PROVENANCE_JOIN_COLS
+    ]
+
+    def _join_unique(x: pd.Series) -> Any:
+        unique = x.dropna().unique()
+        if len(unique) == 0:
+            return pd.NA
+        if len(unique) == 1:
+            return unique[0]
+        return ";".join(str(v) for v in sorted(str(u) for u in unique))
+
+    plain_first_values = (
+        groupby[plain_first_cols].first().reset_index()
+        if plain_first_cols
+        else pd.DataFrame()
+    )
+    provenance_join_values = (
+        groupby[provenance_cols].agg(_join_unique).reset_index()
+        if provenance_cols
+        else pd.DataFrame()
+    )
+
+    first_values_parts = [
+        df for df in [plain_first_values, provenance_join_values]
+        if not df.empty
+    ]
+    if first_values_parts:
+        first_values = first_values_parts[0]
+        for extra in first_values_parts[1:]:
+            first_values = first_values.merge(extra, on=keys_used, how="left", sort=False)
+    else:
+        first_values = pd.DataFrame()
 
     rep_mean = means.copy()
     if not first_values.empty:
@@ -1057,7 +1116,16 @@ def add_conflict_annotations(
             "other": "flag_replicate_other_conflict",
         }
         pivot = pivot.rename(columns=rename_map)
+        # FIX 6-B: de-duplicate pivot before merging to prevent silent row
+        # multiplication when consistency_df has unexpected duplicate keys.
+        pivot = pivot.drop_duplicates(subset=keys_used)
+        _pre_merge_len_r = len(out)
         out = out.merge(pivot, on=keys_used, how="left", suffixes=("", "_new"), sort=False)
+        if len(out) != _pre_merge_len_r:
+            raise RuntimeError(
+                f"add_conflict_annotations: row count changed from "
+                f"{_pre_merge_len_r} to {len(out)} after conflict flag merge."
+            )
 
         for col in rename_map.values():
             new_col = f"{col}_new"

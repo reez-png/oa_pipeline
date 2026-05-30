@@ -19,6 +19,7 @@ explicitly supplies a real default in configuration.
 
 from __future__ import annotations
 
+import sys
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -177,10 +178,14 @@ STAGE1B_DEFAULTS: Dict[str, Any] = {
         "accepted_ph_scale_observed": ["total"],
     },
     "provenance_defaults": {
-        # Stage 1B preserves existing carbonate solver and input pair provenance.
-        # It does not invent solver metadata when those columns are absent.
-        "carbonate_solver": pd.NA,
-        "carbon_input_pair_used": pd.NA,
+        # FIX 5-C: Use None instead of pd.NA here — see FIX 2-A in schema.py.
+        # pd.NA is not JSON-serialisable; write_manifest() silently converts it
+        # to the string "<NA>" which then appears as a real provenance value
+        # when manifests are read back. None serialises cleanly to JSON null.
+        # add_provenance_fields() converts None → pd.NA when writing to DataFrame
+        # columns so column dtype is preserved.
+        "carbonate_solver": None,
+        "carbon_input_pair_used": None,
         "preferred_ta_for_analysis": "ta_best_umolkg",
         "preferred_ph_for_analysis": "ph_best",
         "preferred_pco2_for_analysis": "pco2_best_uatm",
@@ -207,10 +212,14 @@ STAGE1B_DEFAULTS: Dict[str, Any] = {
 
 
 def _has_value(s: pd.Series) -> pd.Series:
-    """Return True where a Series has a non missing and non blank value."""
+    """Return True where a Series has a non missing and non blank value.
+
+    FIX 1-A (stage1b.py copy): Use text.notna() instead of s.notna() in the
+    string branch — consistent with the fix applied to common.has_value_series.
+    """
     if pd.api.types.is_string_dtype(s) or s.dtype == object:
         text = s.astype("string").str.strip()
-        return s.notna() & text.ne("").fillna(False)
+        return text.notna() & text.ne("")
     return s.notna()
 
 
@@ -467,9 +476,21 @@ def add_best_analysis_fields(
         if "phstd_correction_applied" in df.columns:
             applied = _bool_series(df, "phstd_correction_applied", default=False)
         else:
-            # Older files may have a corrected pH column but no correction flag.
-            # Treat non missing corrected values as unknown corrected provenance,
-            # not as a confirmed applied correction.
+            # FIX 5-A: Older files may have a corrected pH column but no
+            # phstd_correction_applied flag. In that case we cannot confirm
+            # which rows were truly corrected vs. which carry the original pH
+            # as a fallback. This means phstd_fail_blocks_corrected_ph in
+            # analysis_ready_subset() will NOT block those rows, which differs
+            # from behaviour on new files that have the flag.
+            # Emit a visible warning so operators know about this difference.
+            print(
+                "\nWARNING (stage1b.add_best_analysis_fields): "
+                f"Column '{corrected_ph_col}' is present but 'phstd_correction_applied' "
+                "is absent. Cannot confirm per-row pH correction status. "
+                "phstd_fail_blocks_corrected_ph will not apply to these rows. "
+                "Re-run the QC notebook to regenerate phstd_correction_applied.\n",
+                file=sys.stderr,
+            )
             applied = pd.Series(False, index=df.index, dtype=bool)
 
         has_ph_after = df["ph_after_phstd_qc"].notna()
@@ -582,9 +603,13 @@ def add_provenance_fields(
             else:
                 df[col] = safe_str_series(df[col]).replace("", pd.NA)
 
-            if _scalar_default_has_value(value):
+            # FIX 5-C: config stores None for "no default" (see STAGE1B_DEFAULTS).
+            # Convert None → pd.NA so the DataFrame column gets the correct
+            # nullable sentinel, not the Python None or string "None".
+            df_value = pd.NA if value is None else value
+            if _scalar_default_has_value(df_value):
                 missing = df[col].isna()
-                df.loc[missing, col] = str(value)
+                df.loc[missing, col] = str(df_value)
         else:
             df[col] = value
 
@@ -711,7 +736,6 @@ def add_scale_flags(
     df["flag_ph_scale_calculated_missing"] = (
         df["ph_co2sys"].notna() & df["ph_scale_calculated_normalized"].isna()
     ).astype("boolean")
-
 
 
 def add_presence_flags(df: pd.DataFrame) -> None:

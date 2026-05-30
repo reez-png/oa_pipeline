@@ -21,6 +21,9 @@ Start with these files and folders:
 | `examples/make_example_data.py` | Deterministic synthetic example workbook generator. |
 | `examples/example_data.xlsx` | Bundled synthetic workbook used by the quickstart and E2E test. |
 | `run_pipeline.sh` | Command line runner that executes the notebook chain. |
+| `oa_pipeline_app.py` / `oa_pipeline_app_core.py` | Desktop GUI launcher and its GUI-independent logic. |
+| `DATA_DICTIONARY.md` | Input contract: accepted column names, values, units, dtypes, row-tagging rules. Regenerate from code if the schema changes. |
+| `APP_README.md` | How to use and set up the desktop launcher. |
 | `configs/` | Optional YAML, YML, or JSON configuration overrides. |
 | `outputs/` | Reproducible per stage outputs. This folder should not be committed. |
 | `runs/` | Papermill executed notebook copies. This folder should not be committed. |
@@ -137,7 +140,7 @@ Notebook code should orchestrate the workflow. Reusable logic should live in `sr
 | A new carbonate integrity check | `oa_pipeline.stage3.carbonate_integrity_checks` or a helper in `oa_pipeline.stage3` |
 | A new Stage 4 audit reason code | `oa_pipeline.stage4.add_readiness_status` |
 | A new helper used by two or more stages | `oa_pipeline.common` |
-| TA CRM certified values | `oa_pipeline.qc_ta_ph.CRM_CERTIFIED_TA` |
+| TA CRM certified values | `configs/crm_certified_values.yaml` (authoritative, NOAA OCADS-sourced; loaded by `oa_pipeline.qc_ta_ph.load_crm_certified_values`). The in-code fallback table is corrected but secondary. |
 | pH standard correction logic | `oa_pipeline.qc_ta_ph` |
 | Read only output inspection helpers | `oa_pipeline.inspect` |
 | Tests for any of the above | `tests/test_<module_or_concept>.py` |
@@ -183,6 +186,16 @@ python -m pip freeze
 
 This helps ensure commands run in the same interpreter where the package is installed.
 
+### Keep the CRM values file authoritative
+
+Certified CRM Total Alkalinity values live in
+`configs/crm_certified_values.yaml`, transcribed from the NOAA OCADS
+Dickson batch table. Only add a batch after transcribing it from the
+certificate for that specific bottle lot — never interpolate or guess.
+The loader stops the run on an unknown batch by design. If you touch the
+input contract (column aliases, accepted values, tag rules), also update
+`DATA_DICTIONARY.md` so it stays in sync with the code.
+
 ### Cite scientific changes in documentation
 
 Thresholds, precision targets, pH scale assumptions, DIC tolerance rules, and CRM or pH buffer values are scientific decisions. Explain the source in the relevant README or documentation, not only in code comments.
@@ -204,6 +217,7 @@ python -m pytest tests/test_coalesce.py -q
 python -m pytest tests/test_schema.py -q
 python -m pytest tests/test_readiness.py -q
 python -m pytest tests/test_pipeline_e2e.py -q
+python -m pytest tests/test_app_core.py -q
 ```
 
 For changes affecting any of the following, always run the E2E test:

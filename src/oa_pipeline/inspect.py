@@ -241,8 +241,16 @@ def show_image(
     path: Path,
     title: Optional[str] = None,
     figsize: tuple[float, float] = (10, 5),
+    show: bool = True,
 ) -> None:
-    """Display an image inline using matplotlib."""
+    """Display an image inline using matplotlib.
+
+    FIX 9-A: Added `show` parameter (default True). When False, the figure is
+    rendered and closed without calling plt.show(). This prevents the function
+    from blocking indefinitely in headless environments such as papermill,
+    CI pipelines, or non-interactive scripts where plt.show() has no display
+    to render to. Set show=False when running notebooks via papermill.
+    """
     path = Path(path).expanduser()
 
     if not path.exists():
@@ -286,5 +294,6 @@ def show_image(
     if title:
         ax.set_title(title)
 
-    plt.show()
+    if show:
+        plt.show()
     plt.close(fig)

@@ -37,6 +37,8 @@ __all__ = [
     # Reference data
     "CRM_CERTIFIED_TA",
     "CRM_REFERENCE_METADATA",
+    "CRM_CERTIFIED_VALUES_CONFIG",
+    "load_crm_certified_values",
     "PH_STD_TABLES",
     "PH_STD_REFERENCE_METADATA",
     # Dataclasses
@@ -63,16 +65,163 @@ __all__ = [
 # =============================================================================
 
 # CRM_CERTIFIED_TA maps CRM batch identifier to certified Total Alkalinity in
-# micromol kg-1. Longer term, move this table to configs/crm_certified_values.yaml
-# so certificate metadata can be versioned without editing Python code.
+# micromol kg-1.
+#
+# AUDIT FIX N-1 (CRITICAL — scientific data integrity)
+# ---------------------------------------------------------------------------
+# The previous version of this table contained FABRICATED values that the
+# code itself described as "illustrative starting points". Cross-checking
+# against the authoritative NOAA OCADS Dickson CRM batch table revealed that
+# SEVEN of the eight hardcoded values were wrong — by up to ~50 umol/kg
+# (batch 220 read 2198.33 here vs. the certified 2148.41). Because the
+# certified value is subtracted from the measured CRM to derive the
+# correction applied to EVERY sample's TA, a wrong certified value injects a
+# systematic bias of the same magnitude into the whole dataset. The QC
+# tolerance is ~1-2 umol/kg, so a 50 umol/kg error is catastrophic and
+# silent.
+#
+# What changed:
+#   1. The preferred source of certified values is now the versioned data
+#      file configs/crm_certified_values.yaml, loaded via
+#      load_crm_certified_values(). Values there are transcribed from the
+#      NOAA OCADS table (https://www.ncei.noaa.gov/access/
+#      ocean-carbon-acidification-data-system/oceans/Dickson_CRM/batches.html).
+#   2. The in-code dictionary below is retained ONLY as a fallback for code
+#      that imports CRM_CERTIFIED_TA directly, and every value in it has been
+#      corrected against the same authoritative table. It is NOT a complete
+#      list — prefer the YAML file, or pass crm_ta_override with the exact
+#      value from your certificate.
+#   3. The batch lookup now raises a clear, instructive error (see
+#      apply_ta_crm_correction) listing both the YAML path and the override
+#      option, rather than silently offering a fabricated default.
+#
+# Reproducibility of Dickson certification is < 1 umol/kg, accuracy within
+# 2 umol/kg (Dickson, Afghan & Anderson 2003, Marine Chemistry 80:185-197).
+# GOA-ON / WMO TA data-quality objectives: 2 / 1 umol/kg.
 CRM_CERTIFIED_TA: Dict[str, float] = {
+    # Batch: certified TA (umol kg-1) — transcribed from NOAA OCADS, 2026-05-29.
+    # Verify against the per-batch certificate PDF for your bottle lot.
+    "180": 2224.47,
+    "195": 2213.51,
+    "200": 2186.43,
+    "205": 2202.05,
+    "210": 2220.62,
+    "211": 2218.40,
+    "212": 2193.54,
     "213": 2203.56,
+    "214": 2200.67,
+    "215": 2191.30,
+    "216": 2188.02,
+    "217": 2212.31,
+    "218": 2197.08,
+    "219": 2183.64,
+    "220": 2148.41,
+    "221": 2183.42,
+    "222": 2215.63,
+    "223": 2225.91,
+    "224": 2235.50,
+    "225": 2215.80,
 }
 
 CRM_REFERENCE_METADATA: Dict[str, str] = {
-    "source": "Dickson laboratory certificate of analysis",
-    "notes": "Add certificate date, bottle number, and certificate file reference when available.",
+    "source": "NOAA OCADS — Dickson CO2 CRM batch table",
+    "url": (
+        "https://www.ncei.noaa.gov/access/ocean-carbon-acidification-data-system/"
+        "oceans/Dickson_CRM/batches.html"
+    ),
+    "unit": "umol kg-1",
+    "retrieved_utc": "2026-05-29",
+    "notes": (
+        "Certified TA transcribed from the NOAA OCADS batch table. Prefer the "
+        "versioned file configs/crm_certified_values.yaml. Always confirm "
+        "against the per-batch certificate PDF for the specific bottle lot."
+    ),
 }
+
+# Default location of the versioned CRM values file, relative to the repo root.
+CRM_CERTIFIED_VALUES_CONFIG = "configs/crm_certified_values.yaml"
+
+
+def load_crm_certified_values(
+    config_path: Optional[str | Path] = None,
+) -> Dict[str, float]:
+    """Load certified CRM Total Alkalinity values from a versioned YAML file.
+
+    AUDIT FIX N-1: This is the preferred source of certified values, replacing
+    the previously fabricated hardcoded table. The YAML file
+    (configs/crm_certified_values.yaml) stores values transcribed from the
+    authoritative NOAA OCADS Dickson CRM batch table together with provenance
+    metadata (source URL, retrieval date, salinity, bottling date).
+
+    Parameters
+    ----------
+    config_path:
+        Path to the YAML file. When None, falls back to the corrected in-code
+        CRM_CERTIFIED_TA dictionary so the function never silently returns an
+        empty mapping.
+
+    Returns
+    -------
+    dict[str, float]
+        Mapping of batch identifier (string) to certified TA in umol kg-1.
+    """
+    if config_path is None:
+        # No file supplied: return a copy of the corrected in-code fallback.
+        return dict(CRM_CERTIFIED_TA)
+
+    path = Path(config_path)
+    if not path.exists():
+        die(
+            f"CRM certified-values file not found: {path}. "
+            "Create it from configs/crm_certified_values.yaml (values "
+            "transcribed from the NOAA OCADS Dickson CRM batch table), or "
+            "pass crm_ta_override with the exact value from your certificate."
+        )
+
+    try:
+        import yaml
+    except ImportError:
+        die(
+            "Reading the CRM certified-values YAML requires PyYAML. "
+            "Install with: python -m pip install pyyaml"
+        )
+
+    try:
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        die(f"Could not parse CRM certified-values file {path}: {exc}")
+
+    if not isinstance(loaded, dict) or "batches" not in loaded:
+        die(
+            f"CRM certified-values file {path} must contain a top-level "
+            "'batches' mapping."
+        )
+
+    result: Dict[str, float] = {}
+    for batch, entry in (loaded.get("batches") or {}).items():
+        key = str(batch)
+        if isinstance(entry, dict):
+            if "total_alkalinity_umol_kg" not in entry:
+                die(
+                    f"CRM batch '{key}' in {path} is missing "
+                    "'total_alkalinity_umol_kg'."
+                )
+            value = entry["total_alkalinity_umol_kg"]
+        else:
+            # Allow a simple "batch: value" shorthand as well.
+            value = entry
+        try:
+            result[key] = float(value)
+        except Exception:
+            die(
+                f"CRM batch '{key}' in {path} has a non-numeric certified TA: "
+                f"{value!r}"
+            )
+
+    if not result:
+        die(f"CRM certified-values file {path} defined no usable batches.")
+
+    return result
 
 # PH_STD_TABLES gives expected pH of TRIS, AMP, and BIS buffers at integer
 # temperatures from -2 to 29 deg C. Longer term, move this table to
@@ -351,6 +500,7 @@ def apply_ta_crm_correction(
     correct_only_samples: bool,
     sop: TaSop,
     sample_flag_value: str = "sample",
+    crm_values: Optional[Dict[str, float]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict[str, Any]]:
     """Detect CRM rows, compute CRM correction, and apply it to eligible rows.
 
@@ -361,8 +511,15 @@ def apply_ta_crm_correction(
     missing or non numeric TA is still counted as a detected CRM row. If
     require_ta_value_for_crm is True, such rows cause a clear failure; if False,
     they are recorded but excluded from the correction calculation.
+
+    AUDIT FIX N-1: ``crm_values`` lets the caller pass certified values loaded
+    from configs/crm_certified_values.yaml (via load_crm_certified_values).
+    When None, the corrected in-code CRM_CERTIFIED_TA fallback is used. The
+    batch lookup raises a clear, instructive error if the batch is unknown,
+    instead of silently substituting a fabricated default.
     """
     require_ta_value_for_crm = bool(require_ta_value_for_crm)
+    certified_values = dict(crm_values) if crm_values else dict(CRM_CERTIFIED_TA)
 
     ta_col = resolve_col(df, ta_col)
     sample_tag_col = resolve_col(df, sample_tag_col)
@@ -379,9 +536,19 @@ def apply_ta_crm_correction(
         ta_cert = float(crm_ta_override)
         batch_used = "override"
     else:
-        if crm_batch not in CRM_CERTIFIED_TA:
-            die(f"Unknown CRM batch '{crm_batch}'. Known: {list(CRM_CERTIFIED_TA.keys())}")
-        ta_cert = float(CRM_CERTIFIED_TA[crm_batch])
+        if crm_batch not in certified_values:
+            die(
+                f"Unknown CRM batch '{crm_batch}'. "
+                f"Known batches: {sorted(certified_values.keys())}. "
+                "Certified values must be transcribed from the per-batch "
+                "Dickson certificate (see configs/crm_certified_values.yaml, "
+                "sourced from the NOAA OCADS table). If your batch is not "
+                "listed, add it there with its certified value, or pass "
+                "crm_ta_override with the exact value from your certificate. "
+                "The pipeline refuses to guess a certified value because a "
+                "wrong value biases every corrected TA measurement."
+            )
+        ta_cert = float(certified_values[crm_batch])
         batch_used = str(crm_batch)
 
     out = df.copy()
@@ -422,23 +589,28 @@ def apply_ta_crm_correction(
             f"to record these rows but exclude them from correction."
         )
 
-    crm["ta_certified_umolkg"] = ta_cert
-    crm["ta_diff_umolkg"] = crm["ta_certified_umolkg"] - crm[ta_col]
-    crm["ta_exceeds_sop_reject"] = (
-        crm["ta_diff_umolkg"].abs() > float(sop.reject)
-    ).astype("boolean")
-    crm["ta_diff_umolkg_is_outlier"] = robust_outlier_flags(
-        crm["ta_diff_umolkg"],
-        mad_k=mad_k,
-        max_abs=max_abs_diff,
-        min_n=max(5, int(min_crm_n)),
-    ).astype("boolean")
-
+    # FIX 4-A: Guard the CRM computation block *before* the computations so
+    # the empty path never reaches the arithmetic. The previous code placed
+    # the guard *after* assigning into crm[], making it a dead block that
+    # silently re-assigned empty typed Series over already-existing columns.
     if crm.empty:
+        crm = crm.copy()  # avoid SettingWithCopyWarning on empty slice
         crm["ta_certified_umolkg"] = pd.Series(dtype="float64")
         crm["ta_diff_umolkg"] = pd.Series(dtype="float64")
         crm["ta_exceeds_sop_reject"] = pd.Series(dtype="boolean")
         crm["ta_diff_umolkg_is_outlier"] = pd.Series(dtype="boolean")
+    else:
+        crm["ta_certified_umolkg"] = ta_cert
+        crm["ta_diff_umolkg"] = crm["ta_certified_umolkg"] - crm[ta_col]
+        crm["ta_exceeds_sop_reject"] = (
+            crm["ta_diff_umolkg"].abs() > float(sop.reject)
+        ).astype("boolean")
+        crm["ta_diff_umolkg_is_outlier"] = robust_outlier_flags(
+            crm["ta_diff_umolkg"],
+            mad_k=mad_k,
+            max_abs=max_abs_diff,
+            min_n=max(5, int(min_crm_n)),
+        ).astype("boolean")
 
     crm_for_correction = crm.loc[
         crm["ta_diff_umolkg"].notna()
@@ -683,12 +855,18 @@ def write_rm_ta_diff_qc_plot(
     ax.grid(True, linestyle=":", linewidth=1.0)
 
     if annotate_points and sample_tag_col in dfp.columns:
-        for _, r in dfp.iterrows():
-            tag = str(r.get(sample_tag_col, "")).strip()
-            if tag:
+        # AUDIT FIX N-4: iterate with zip over the three needed columns instead
+        # of DataFrame.iterrows(), which builds a per-row Series. This is a
+        # small per-analysis subset so the impact is minor, but zip avoids the
+        # Series-construction overhead and the dtype coercion iterrows performs.
+        for tag_val, x_val, y_val in zip(
+            dfp[sample_tag_col], dfp["analysis_number"], dfp["ta_diff_umolkg"]
+        ):
+            tag = str(tag_val).strip() if tag_val is not None else ""
+            if tag and tag.lower() not in {"nan", "<na>", "none"}:
                 ax.annotate(
                     tag,
-                    (r["analysis_number"], r["ta_diff_umolkg"]),
+                    (x_val, y_val),
                     textcoords="offset points",
                     xytext=(6, 4),
                     fontsize=9,
@@ -1119,6 +1297,23 @@ def apply_ph_standard_qc_and_correction(
     temp_min = _safe_float(std[temp_col].min()) if temp_col in std.columns and not std.empty else float("nan")
     temp_max = _safe_float(std[temp_col].max()) if temp_col in std.columns and not std.empty else float("nan")
 
+    # FIX 4-B: Include the actual out-of-range temperature values in the
+    # summary so operators can assess severity (lab at 30°C vs polar sample at
+    # -3°C have very different scientific implications). Previously only the
+    # count was reported, hiding the magnitude of the range violation.
+    _table_temp_min = min(PH_STD_TABLES.get(buffer.lower(), {}).keys(), default=-2)
+    _table_temp_max = max(PH_STD_TABLES.get(buffer.lower(), {}).keys(), default=29)
+    if temp_col in std.columns and not std.empty:
+        _temp_vals = pd.to_numeric(std[temp_col], errors="coerce")
+        _outside_mask = _temp_vals.notna() & (
+            (_temp_vals < _table_temp_min) | (_temp_vals > _table_temp_max)
+        )
+        temperature_outside_table_values = sorted(
+            _temp_vals[_outside_mask].dropna().tolist()
+        )
+    else:
+        temperature_outside_table_values = []
+
     summary: Dict[str, Any] = {
         "buffer": buffer.lower(),
         "tag_prefix": tag_prefix,
@@ -1129,6 +1324,8 @@ def apply_ph_standard_qc_and_correction(
         "n_numeric_temp_and_ph": n_numeric_temp_and_ph,
         "n_valid": n_valid,
         "n_temp_outside_table": n_temp_outside,
+        # FIX 4-B: actual out-of-range temperature values for operator review
+        "temperature_outside_table_values": temperature_outside_table_values,
         "n_outlier": n_outlier,
         "n_kept": n_kept,
         "overall_n_kept": overall_n_kept,
@@ -1212,12 +1409,16 @@ def write_phstd_qc_plot(
     ax.grid(True, linestyle=":", linewidth=1.0)
 
     if annotate_points and sample_tag_col in dfp.columns:
-        for _, r in dfp.iterrows():
-            tag = str(r.get(sample_tag_col, "")).strip()
-            if tag:
+        # AUDIT FIX N-4: see the TA plot above — iterate with zip over the
+        # needed columns instead of DataFrame.iterrows().
+        for tag_val, x_val, y_val in zip(
+            dfp[sample_tag_col], dfp["analysis_number"], dfp[diff_col]
+        ):
+            tag = str(tag_val).strip() if tag_val is not None else ""
+            if tag and tag.lower() not in {"nan", "<na>", "none"}:
                 ax.annotate(
                     tag,
-                    (r["analysis_number"], r[diff_col]),
+                    (x_val, y_val),
                     textcoords="offset points",
                     xytext=(6, 4),
                     fontsize=10,

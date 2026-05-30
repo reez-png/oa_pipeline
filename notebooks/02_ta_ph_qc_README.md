@@ -1,5 +1,17 @@
 # Notebook 02 — TA CRM QC and pH-standard QC
 
+> **Module-name note (post-audit):** This README predates the packaging of the
+> helpers into the installable `oa_pipeline` package. Where the text refers to
+> flat module names, the real import paths are:
+> `oa_common.py` → `oa_pipeline/common.py`,
+> `oa_qc_ta_ph.py` → `oa_pipeline/qc_ta_ph.py`,
+> `oa_schema.py` → `oa_pipeline/schema.py`,
+> `oa_policy.py` → `oa_pipeline/policy.py`,
+> `oa_stage1b.py`/`oa_stage2.py`/`oa_stage3.py`/`oa_stage4.py` → `oa_pipeline/stage1b.py` … `stage4.py`,
+> `oa_inspect.py` → `oa_pipeline/inspect.py`.
+> The notebook code cells already use the correct `from oa_pipeline.<module> import ...` form.
+
+
 Second notebook of the split. **This one matters most** because its
 `derived.csv` is the file Stage 1A actually reads — get this right and the
 rest of the chain has clean inputs to work from.
@@ -153,7 +165,8 @@ itself.
 | Name | Default | Meaning |
 |------|---------|---------|
 | `CRM_CORRECT_TA` | True | Master switch for TA QC |
-| `CRM_BATCH` | `"213"` | Must exist in `CRM_CERTIFIED_TA` in `oa_qc_ta_ph.py` |
+| `CRM_BATCH` | `"213"` | Must exist in `configs/crm_certified_values.yaml` (or the corrected in-code fallback in `oa_pipeline/qc_ta_ph.py`). |
+| `CRM_VALUES_CONFIG` | `"configs/crm_certified_values.yaml"` | **Audit fix N-1.** Path to the authoritative certified CRM values, transcribed from the NOAA OCADS Dickson batch table. `None` → use the corrected in-code fallback. |
 | `CRM_TA_OVERRIDE` | None | Numeric value to override the certified TA |
 | `CRM_TAG_PREFIX` | `"RM"` | CRM tag prefix |
 | `MIN_CRM_N` | 2 | Minimum non-outlier CRMs needed to compute a correction |
@@ -186,7 +199,7 @@ itself.
 | 3 | Single `%pip install` instead of one per major section | The original had it in both notebook 01 and notebook 02. Removed the duplicate. |
 | 4 | Output filenames are short and descriptive (`derived.csv`, `ta_crm_qc.csv`) | The audit you ran identified accumulated stage tags / workbook stems as the problem. Sheet identity lives in the folder; file role lives in the filename. |
 | 5 | New `logs/manifest.json` per run | Provenance (input path, parameters, outputs, package versions) belongs in a side-channel log, not in filenames. Ten Simple Rules R8. |
-| 6 | Reference data (`CRM_CERTIFIED_TA`, `PH_STD_TABLES`) lives at the top of `oa_qc_ta_ph.py` with a source comment | Adding a new CRM batch is a one-line edit in one file; the QC functions read from there. |
+| 6 | **Audit fix N-1 (critical):** certified CRM Total Alkalinity values moved to the versioned `configs/crm_certified_values.yaml`, transcribed from the authoritative NOAA OCADS Dickson batch table. The previous hardcoded table had **7 of 8 values fabricated** (wrong by up to ~50 µmol/kg, vs a ~1–2 µmol/kg tolerance), which silently biased every corrected TA. `CRM_BATCH` is now loaded via `load_crm_certified_values(CRM_VALUES_CONFIG)` and passed to `apply_ta_crm_correction(crm_values=...)`. Unknown batches now stop the run with an instructive error instead of guessing. `PH_STD_TABLES` still lives in `qc_ta_ph.py`. |
 | 7 | `robust_outlier_flags` and `build_corrections_table` moved to `oa_common.py` | Stage 3 of the original notebook redefined `robust_outlier_flags`. Moving it to `oa_common` now prevents that divergence. |
 | 8 | `matplotlib` imported lazily inside plot functions | Same as the original — preserves the ability to run on headless / CI nodes without matplotlib. |
 | 9 | Plot annotation logic hardened | The original fell back to a literal string `"sample_tag"` when the column was missing — which would then `die()` inside `resolve_col`. Now the plot is skipped cleanly if the tag column is absent. |
@@ -270,7 +283,10 @@ Notebook 02 to repopulate it.
 
 - **Reference tables are inline in `oa_qc_ta_ph.py`.** If the chemist
   bookkeeping for CRMs grows beyond a handful of batches, move
-  `CRM_CERTIFIED_TA` to a `reference/crm_ta.json` file and load it. Same
+  `CRM_CERTIFIED_TA` to a config file — **done** (audit fix N-1):
+  certified values now live in `configs/crm_certified_values.yaml`,
+  sourced from the NOAA OCADS Dickson batch table. Always confirm the
+  value against the actual certificate PDF for your bottle lot. Same
   for `PH_STD_TABLES` if more buffers are added.
 - **No version pinning yet.** A `requirements.txt` with pinned
   `pandas`, `openpyxl`, `matplotlib` versions will land alongside the

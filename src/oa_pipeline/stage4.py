@@ -311,8 +311,15 @@ STAGE4_DEFAULTS: Dict[str, Any] = {
         "dic_max": 3500.0,
         "pco2_min": 0.0,
         "pco2_max": 10000.0,
+        # FIX 3-B (scientific, downstream): Stage 4 now carries separate omega
+        # limits for aragonite and calcite consistent with policy.py changes.
+        # Legacy omega_min/max retained for RangePolicy backwards compatibility.
         "omega_min": 0.0,
         "omega_max": 20.0,
+        "omega_ar_min": 0.0,
+        "omega_ar_max": 20.0,
+        "omega_ca_min": 0.0,
+        "omega_ca_max": 20.0,
     },
     "dic_species_audit": {
         "enabled": True,
@@ -485,10 +492,14 @@ def _as_bool(value: Any) -> bool:
 
 
 def _has_value(series: pd.Series) -> pd.Series:
-    """Return True where a Series has a non missing and non blank value."""
+    """Return True where a Series has a non missing and non blank value.
+
+    FIX 1-A (stage4.py copy): Use text.notna() instead of series.notna() in
+    the string branch — consistent with the fix applied to common.has_value_series.
+    """
     if pd.api.types.is_string_dtype(series) or series.dtype == object:
         text = series.astype("string").str.strip()
-        return series.notna() & text.ne("").fillna(False)
+        return text.notna() & text.ne("")
     return series.notna()
 
 
@@ -631,10 +642,25 @@ def coerce_and_standardize(df: pd.DataFrame, notes: List[str]) -> pd.DataFrame:
             out[f"raw_non_numeric__{col}"] = raw.where(parse_failed, pd.NA).astype("string")
             out[col] = numeric
 
+    # FIX 8-B: depth_round_m is a required Stage 4 key column but is only
+    # created by Stage 2's add_time_and_depth_keys(). If a notebook feeds
+    # Stage 1B output directly into Stage 4 (skipping Stage 2), depth_round_m
+    # would be absent and missing_key_rows() would mark every row as having a
+    # missing key, causing analysis_audit_status = "FAIL" for all rows.
+    # This fallback creates depth_round_m from depth_m when it is absent or
+    # fully missing, so Stage 4 works correctly whether or not Stage 2 ran.
     if "depth_round_m" not in out.columns or out["depth_round_m"].isna().all():
         if "depth_m" in out.columns:
-            out["depth_round_m"] = pd.to_numeric(out["depth_m"], errors="coerce")
+            notes.append(
+                "depth_round_m was absent or all-missing. Created from depth_m "
+                "(rounded to 1 decimal). Run Stage 2 for proper depth binning."
+            )
+            out["depth_round_m"] = pd.to_numeric(out["depth_m"], errors="coerce").round(1)
         else:
+            notes.append(
+                "depth_round_m and depth_m are both absent. depth_round_m set to missing. "
+                "Rows will be flagged as missing_key by missing_key_rows()."
+            )
             out["depth_round_m"] = empty_float_series(out.index)
 
     out["lat"] = (
@@ -793,8 +819,13 @@ def run_range_checks(
         (["ta_best_umolkg"], policy.ta_min, policy.ta_max, "alkalinity"),
         (["dic_best_umol_kg"], policy.dic_min, policy.dic_max, "dic"),
         (["pco2_best_uatm"], policy.pco2_min, policy.pco2_max, "pco2"),
-        (["omega_aragonite_calc"], policy.omega_min, policy.omega_max, "omega_aragonite"),
-        (["omega_calcite_calc"], policy.omega_min, policy.omega_max, "omega_calcite"),
+        # FIX 3-B (scientific, downstream): Use the mineral-specific omega policy
+        # fields so aragonite and calcite can have independent plausible ranges.
+        # Aragonite saturation state drops below 1 in polar/deep waters before
+        # calcite does (Orr et al. 2005, Nature 437:681; Feely et al. 2004,
+        # Science 305:362-366). Sharing one field prevented separate thresholds.
+        (["omega_aragonite_calc"], policy.omega_ar_min, policy.omega_ar_max, "omega_aragonite"),
+        (["omega_calcite_calc"], policy.omega_ca_min, policy.omega_ca_max, "omega_calcite"),
     ]
 
     id_cols = [col for col in _ID_COLS if col in df.columns]
@@ -1032,7 +1063,19 @@ def dic_species_audit(
     checkable = vals_ok & ~unit_missing.fillna(False) & ~unit_mismatch.fillna(False)
     species_sum = co2 + hco3 + co3
     diff = dic - species_sum
-    tol = (dic.abs() * check.rel_tol).clip(lower=check.abs_tol_umolkg)
+    # FIX 8-C (scientific): Apply both lower and upper clips to the tolerance
+    # formula. Without an upper clip, a DIC value of 3000 µmol/kg at 1%
+    # relative tolerance allows a 30 µmol/kg species sum discrepancy, which is
+    # far outside what CO2SYS should produce for internally consistent data
+    # (Lewis & Wallace 1998; Orr et al. 2015 SOCAT protocols).
+    # Upper clip = 10 × abs_tol_umolkg (configurable via abs_tol_umolkg in
+    # dic_species_audit config block). This keeps the tolerance physically
+    # meaningful across the full oceanic DIC range.
+    _dic_tol_upper = check.abs_tol_umolkg * 10.0
+    tol = (dic.abs() * check.rel_tol).clip(
+        lower=check.abs_tol_umolkg,
+        upper=_dic_tol_upper,
+    )
     strict_fail = (
         negative_species
         | (checkable & (diff.abs() > tol))
@@ -1212,9 +1255,16 @@ def add_readiness_status(
         dtype="string",
     )
 
+    # FIX 8-A: Use explicit where() pattern so priority ordering is unambiguous.
+    # The previous sequential assignment (PASS → REVIEW → FAIL) was logically
+    # correct today but fragile: any future flag added to `review` after the
+    # `severe` assignment would silently downgrade a FAIL row to REVIEW.
+    # where(~condition, new_value) means "keep existing value where condition
+    # is False, replace with new_value where condition is True", so FAIL always
+    # wins over REVIEW, and REVIEW only applies where FAIL is not set.
     status = pd.Series("PASS", index=out.index, dtype="string")
-    status.loc[review] = "REVIEW"
-    status.loc[severe] = "FAIL"
+    status = status.where(~review, "REVIEW")
+    status = status.where(~severe, "FAIL")
     out["analysis_audit_status"] = status
 
     return out

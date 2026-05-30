@@ -1,0 +1,74 @@
+# =====================================================================
+# crm_certified_values.yaml
+# Dickson CO2-in-seawater Certified Reference Material (CRM) values
+# =====================================================================
+#
+# AUDIT FIX N-1 (CRITICAL, scientific data integrity)
+# ---------------------------------------------------------------------
+# This file replaces the hardcoded CRM_CERTIFIED_TA dictionary that
+# previously lived inside qc_ta_ph.py. Seven of the eight values that
+# were hardcoded there were FABRICATED ("illustrative starting points")
+# and disagreed with the real Dickson certificates by up to ~50 umol/kg
+# — catastrophic when the TA QC tolerance is ~1-2 umol/kg, because the
+# certified value is subtracted from the measured CRM to set the
+# correction applied to EVERY sample's TA.
+#
+# All total_alkalinity_umol_kg values below are transcribed from the
+# authoritative NOAA OCADS batch table (verified 2026-05-29):
+#   https://www.ncei.noaa.gov/access/ocean-carbon-acidification-data-system/oceans/Dickson_CRM/batches.html
+# Individual batch certificates (PDF) are linked from that page under
+#   .../Dickson_CRM/rmdata/BatchNN.pdf
+#
+# IMPORTANT OPERATIONAL RULES
+# ---------------------------------------------------------------------
+# 1. Only add a batch here after transcribing its value from the actual
+#    certificate for YOUR bottle lot. Do NOT interpolate or guess.
+# 2. The pipeline loader (load_crm_certified_values) will die() if a
+#    requested batch is absent. This is intentional: a hard stop is far
+#    safer than silently applying a wrong or fabricated value.
+# 3. If you have a certificate the table here does not cover, either add
+#    it here (with source + date) or pass crm_ta_override at the call
+#    site with the exact certified value from your certificate.
+#
+# Dickson certification reproducibility is < 1 umol/kg and accuracy
+# within 2 umol/kg (Dickson, Afghan & Anderson 2003, Marine Chemistry
+# 80:185-197). GOA-ON / WMO TA data-quality objectives are 2 / 1 umol/kg
+# (GOA-ON 2019; WMO 2022).
+# =====================================================================
+
+config_type: crm_certified_values
+schema_version: 1
+source:
+  authority: NOAA OCADS — Dickson CO2 CRM batch table
+  url: https://www.ncei.noaa.gov/access/ocean-carbon-acidification-data-system/oceans/Dickson_CRM/batches.html
+  retrieved_utc: "2026-05-29"
+  unit: umol kg-1
+  notes: >
+    Certified Total Alkalinity values transcribed from the NOAA OCADS
+    batch table. Salinity is included for traceability. Always confirm
+    against the per-batch certificate PDF for the specific bottle lot.
+
+# Batches confirmed against the NOAA OCADS table. The previously
+# hardcoded set was {180,195,200,210,213,218,220,222}; only 213 was
+# correct. All are corrected here, and a few recent batches are added.
+batches:
+  "180": { total_alkalinity_umol_kg: 2224.47, salinity: 33.623, bottling_date: "2018-10-19" }
+  "195": { total_alkalinity_umol_kg: 2213.51, salinity: 33.485, bottling_date: "2021-04-22" }
+  "200": { total_alkalinity_umol_kg: 2186.43, salinity: 33.464, bottling_date: "2021-12-02" }
+  "205": { total_alkalinity_umol_kg: 2202.05, salinity: 33.443, bottling_date: "2022-09-09" }
+  "210": { total_alkalinity_umol_kg: 2220.62, salinity: 33.231, bottling_date: "2023-05-19" }
+  "211": { total_alkalinity_umol_kg: 2218.40, salinity: 33.272, bottling_date: "2023-06-06" }
+  "212": { total_alkalinity_umol_kg: 2193.54, salinity: 33.341, bottling_date: "2023-08-10" }
+  "213": { total_alkalinity_umol_kg: 2203.56, salinity: 33.232, bottling_date: "2023-09-22" }
+  "214": { total_alkalinity_umol_kg: 2200.67, salinity: 33.075, bottling_date: "2023-12-01" }
+  "215": { total_alkalinity_umol_kg: 2191.30, salinity: 32.942, bottling_date: "2024-02-16" }
+  "216": { total_alkalinity_umol_kg: 2188.02, salinity: 32.899, bottling_date: "2024-03-22" }
+  "217": { total_alkalinity_umol_kg: 2212.31, salinity: 32.899, bottling_date: "2024-05-02" }
+  "218": { total_alkalinity_umol_kg: 2197.08, salinity: 33.111, bottling_date: "2024-06-27" }
+  "219": { total_alkalinity_umol_kg: 2183.64, salinity: 32.710, bottling_date: "2024-09-13" }
+  "220": { total_alkalinity_umol_kg: 2148.41, salinity: 32.569, bottling_date: "2025-01-17" }
+  "221": { total_alkalinity_umol_kg: 2183.42, salinity: 33.140, bottling_date: "2025-03-21" }
+  "222": { total_alkalinity_umol_kg: 2215.63, salinity: 33.140, bottling_date: "2025-05-02" }
+  "223": { total_alkalinity_umol_kg: 2225.91, salinity: 32.995, bottling_date: "2025-06-27" }
+  "224": { total_alkalinity_umol_kg: 2235.50, salinity: 33.080, bottling_date: "2025-08-01" }
+  "225": { total_alkalinity_umol_kg: 2215.80, salinity: 33.110, bottling_date: "2025-09-05" }

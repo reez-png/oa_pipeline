@@ -12,9 +12,29 @@
 #   configs/04_stage1a.yaml
 #   configs/07_stage3.yaml
 #   configs/08_stage4.yaml
+#
+# CHANGES FROM v0.1.0
+# -------------------
+# R-5: Added compatible_pipeline_version field (audit R-5).
+# R-1: Added note that spatial_domain limits must be manually wired into
+#      stage4 range_policy (audit R-1).
+# R-2: Extended high_salinity_marine max from 40 to 42 to close the gap
+#      between the regime table and the pipeline sal_max (audit R-2).
+# R-3: Added cross-reference note that pH_observed must be on total scale
+#      for the default_input_pair (audit R-3).
+# R-4: Added vertical_datum and depth_positive_direction to spatial_domain
+#      (audit R-4).
+# X-2: Added sync comment linking pH_policy to cruise_grade_thresholds.yaml
+#      accepted_ph_scales (audit X-2).
+# =====================================================================
 
-version: 0.1.0
+version: 0.2.0
 config_type: regional_reference
+
+# R-5 FIX: Pin to the pipeline version this config was written against.
+# Re-validate against the source if pipeline __version__ changes.
+# The pipeline exposes __version__ via oa_pipeline.__version__.
+compatible_pipeline_version: ">=0.2.0"
 
 metadata:
   project: OA pipeline
@@ -25,12 +45,30 @@ metadata:
     cruise station coordinates, sampling depths, season, and instrument
     metadata.
 
+# R-1 FIX: The spatial domain below defines the Ghana shelf study area.
+# IMPORTANT: these limits are NOT automatically enforced by the pipeline.
+# To enforce them as data quality checks, copy lat_min/lat_max/lon_min/lon_max
+# into configs/08_stage4.yaml under range_policy (using a small buffer, e.g.
+# lat_min: 2.0, lat_max: 8.0, lon_min: -5.0, lon_max: 3.0).
+# The current stage4_template in cruise_grade_thresholds.yaml uses global
+# lat/lon limits and will NOT flag out-of-region position errors.
 spatial_domain:
   latitude_min: 3.0
   latitude_max: 7.0
   longitude_min: -4.0
   longitude_max: 2.0
   coordinate_reference_system: EPSG:4326
+  # R-4 FIX: Document the vertical datum so depth comparisons are unambiguous.
+  # CTD-derived depths on the Ghana shelf are typically referenced to the sea
+  # surface using the Saunders-Fofonoff (1976) pressure-to-depth conversion.
+  # If depth comes from chart soundings, it may reference LAT — note this in
+  # cruise metadata.
+  vertical_datum: sea_surface_MSL
+  depth_positive_direction: downward
+  # NOTE: the longitude domain clips the Bight of Benin east of 2E. Any
+  # offshore or cross-shelf station east of 2E will be outside this domain
+  # but will still pass the global stage4 lat/lon check. Extend lon_max to
+  # 3.0 or 4.0 if the cruise plan includes eastern stations.
 
 regional_context:
   country: Ghana
@@ -57,9 +95,16 @@ hydrographic_context:
     coastal_marine:
       min: 30
       max: 36
+    # R-2 FIX: Extended high_salinity_marine max from 40 to 42 to close the
+    # gap between the regime table and the pipeline sal_max of 42. Values
+    # above 40 on the Ghana shelf are uncommon and should be reviewed for
+    # possible instrument drift or extreme evaporation in isolated lagoons.
     high_salinity_marine:
       min: 36
-      max: 40
+      max: 42
+      notes: >
+        Values above 40 are unusual on the open Ghana shelf. Review for
+        instrument drift, isolated lagoon influence, or transcription error.
 
   default_temperature_unit: degree_C
   default_salinity_unit: practical_salinity
@@ -71,7 +116,9 @@ carbonate_system:
   dic_unit: umol kg-1
   nutrient_unit: umol kg-1
 
-  default_input_pair: TA + pH_observed
+  # R-3 FIX: Explicitly state that pH_observed in the input pair must be
+  # on the total scale. See pH_policy.accepted_scales below.
+  default_input_pair: TA + pH_observed    # pH_observed MUST be on the total scale.
 
   constants_policy:
     carbonic_acid_constants: document_in_stage_report
@@ -89,13 +136,18 @@ carbonate_system:
       If pressure is estimated from depth, the conversion method should
       be documented in the stage report and manifest.
 
+  # X-2 FIX: Keep this in sync with cruise_grade_thresholds.yaml
+  # operational_stage_config_templates.stage3_template.accepted_ph_scales.
+  # If you add a scale here, add it there too, and vice versa.
   pH_policy:
     accepted_scales:
       - total
     reject_unknown_scale: true
     notes: >
       pH values from different scales should not be mixed. Convert only
-      when the original scale and conversion method are known.
+      when the original scale and conversion method are known. Gulf of Guinea
+      historical data may include NBS-scale pH — do not use without converting
+      to total scale and documenting the conversion method.
 
 output_policy:
   write_csv: true

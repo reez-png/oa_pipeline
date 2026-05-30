@@ -18,6 +18,7 @@ import json
 import math
 import re
 import sys
+import warnings
 from collections.abc import Mapping
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -262,10 +263,18 @@ def has_value_series(s: pd.Series) -> pd.Series:
 
     This treats Excel style blank strings as missing while preserving normal
     numeric missingness semantics for numeric columns.
+
+    FIX 1-A: Use text.notna() throughout the string branch rather than
+    s.notna(). When dtype is object and a cell contains a blank string "",
+    s.notna() is True but text after stripping is "". The previous code
+    relied on the & operator to combine s.notna() (True) with
+    text.ne("") (False), which happened to give False — but only because
+    the & worked correctly. Using text.notna() directly is unambiguous
+    and handles pd.NA-in-object-arrays correctly in all cases.
     """
     if pd.api.types.is_string_dtype(s) or s.dtype == object:
         text = s.astype("string").str.strip()
-        return s.notna() & text.ne("").fillna(False)
+        return text.notna() & text.ne("")
 
     return s.notna()
 
@@ -788,11 +797,17 @@ def write_csv_and_parquet(
     csv_path: Path,
     parquet_path: Path,
     write_parquet: bool = True,
+    raise_on_parquet_error: bool = False,
 ) -> tuple[bool, Optional[str]]:
     """Write CSV always and Parquet optionally.
 
     CSV settings are explicit for stable output across machines. Temporary
     files are used so a crash is less likely to leave a half written final file.
+
+    FIX 1-C: Added raise_on_parquet_error parameter. When False (default),
+    Parquet failures are logged to stderr instead of being silently swallowed
+    via an ignorable return value. When True, the exception is re-raised so
+    callers can handle it explicitly.
     """
     csv_path = Path(csv_path)
     parquet_path = Path(parquet_path)
@@ -829,7 +844,16 @@ def write_csv_and_parquet(
     except Exception as exc:
         if tmp_parquet.exists():
             tmp_parquet.unlink()
-        return False, str(exc)
+        msg = str(exc)
+        # FIX 1-C: always surface Parquet failures; never silently ignore.
+        print(
+            f"\nWARNING: Parquet write failed for {parquet_path}: {msg}\n"
+            "CSV output is intact. Set write_parquet=False to suppress this.\n",
+            file=sys.stderr,
+        )
+        if raise_on_parquet_error:
+            raise
+        return False, msg
 
 
 # =============================================================================
@@ -872,6 +896,18 @@ def robust_outlier_flags(
         mad = (xx - med).abs().median()
 
         if pd.isna(mad) or mad == 0:
+            # MAD == 0 means more than half the valid values are identical.
+            # The MAD rule cannot distinguish outliers from the identical mass.
+            # We return no flags rather than crashing, but emit a warning so
+            # the caller can decide whether to surface this in a QC summary.
+            warnings.warn(
+                f"robust_outlier_flags: MAD is {'zero' if mad == 0 else 'NaN'} "
+                f"for the supplied series (n_valid={valid_n}). "
+                "The MAD outlier rule is disabled. Check for a uniform column "
+                "or too few distinct values.",
+                UserWarning,
+                stacklevel=2,
+            )
             mad_rule = pd.Series(False, index=xx.index)
         else:
             sigma = 1.4826 * mad
@@ -915,8 +951,16 @@ def build_corrections_table(
         grp = (
             ok[[group_by, diff_col]]
             .groupby(group_by, dropna=False)[diff_col]
-            .agg(["count", "mean", "std"])
-            .rename(columns={"count": "n", "mean": "correction", "std": "sd"})
+            .agg(
+                # FIX 1-D: pass ddof=1 explicitly via lambda so the result is
+                # consistent across all pandas minor versions.  groupby.agg("std")
+                # does default to ddof=1 in most releases, but this is not
+                # guaranteed by the public API contract.
+                n="count",
+                mean="mean",
+                std=lambda x: x.std(ddof=1),
+            )
+            .rename(columns={"n": "n", "mean": "correction", "std": "sd"})
             .reset_index()
         )
 

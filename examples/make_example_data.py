@@ -47,6 +47,7 @@ The output is deterministic because a fixed random seed is used.
 from __future__ import annotations
 
 import argparse
+import warnings
 from pathlib import Path
 from typing import Final
 
@@ -326,7 +327,22 @@ def build_example_dataset() -> pd.DataFrame:
     crms = _build_crm_rows(rng)
     standards = _build_ph_standard_rows()
 
-    df = pd.concat([samples, crms, standards], ignore_index=True)
+    # The CRM and standard frames legitimately carry all-NA values in some
+    # chemistry columns (a CRM has no DIC species, etc.). pandas emits a
+    # FutureWarning about all-NA columns changing concat dtype behaviour; the
+    # current behaviour is what we want and the generated workbook is verified
+    # bit-identical, so we silence just this one warning to keep output clean.
+    columns = list(samples.columns)
+    frames = [
+        frame.reindex(columns=columns) for frame in (samples, crms, standards)
+    ]
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="The behavior of DataFrame concatenation with empty or all-NA entries is deprecated",
+            category=FutureWarning,
+        )
+        df = pd.concat(frames, ignore_index=True)
     _validate_example_dataset(df)
     return df
 

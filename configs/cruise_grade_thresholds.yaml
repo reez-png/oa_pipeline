@@ -26,10 +26,30 @@
 # scientific acceptance rules. Any flagged value should be reviewed with
 # cruise notes, calibration records, CRM records, station metadata, and
 # regional oceanographic context.
+#
+# CHANGES FROM v0.1.0
+# -------------------
+# C-1: Added omega_ar_min/max and omega_ca_min/max to stage4_template.
+#      Required by pipeline Fix 3-B (separate aragonite/calcite policy fields).
+# C-2: Added inline notes to ta_min/dic_min in stage4_template explaining
+#      that estuarine samples may legitimately fall below 200 umol/kg.
+# C-3: Added pCO2 range to range_checks_reference and stage4_template.
+# C-4: Reduced depth_max from 6000 to 500 m (Ghana shelf). Note added.
+# C-5: Renamed nitrate_umol_l to nitrate_nitrite_umol_l in pipeline_key_mapping.
+# C-6: Changed ph_total mapping target from ph_best to ph_observed.
+# C-7: Standardised carbonate_pair_policy input pair labels to lowercase pH scale.
+# R-5: Added compatible_pipeline_version.
+# X-1: Added omega_ar/ca keys to stage4_template; verified all alias keys OK.
+# X-2: Added sync comment linking accepted_ph_scales to regional.yaml.
+# S-1: Added note recommending temp_min_c tighten to 15 for Ghana shelf.
+# S-3: Added omega saturation state thresholds with Ghana shelf context.
 # =====================================================================
 
-version: 0.1.0
+version: 0.2.0
 config_type: threshold_reference
+
+# R-5 FIX: Pin to the pipeline version this config was written against.
+compatible_pipeline_version: ">=0.2.0"
 
 metadata:
   project: OA pipeline
@@ -61,6 +81,8 @@ units:
   ta: umol kg-1
   dic: umol kg-1
   ph: total_scale
+  pco2: uatm
+  omega: dimensionless
   oxygen: umol L-1
   nitrate_nitrite: umol L-1
   phosphate: umol L-1
@@ -84,9 +106,17 @@ pipeline_key_mapping:
   depth_m: depth_m
   ta_umol_kg: ta_best_umolkg
   dic_umol_kg: dic_best_umol_kg
-  ph_total: ph_best
+  # C-6 FIX: Map raw measured pH to ph_observed (not ph_best).
+  # ph_observed feeds the Stage 1B pH standard correction workflow,
+  # which then produces ph_best. Mapping directly to ph_best would
+  # bypass the correction and its provenance tracking entirely.
+  ph_total: ph_observed
   oxygen_umol_l: oxygen_umol_l
-  nitrate_umol_l: nitrate_nitrite_umol_l
+  # C-5 FIX: Renamed from nitrate_umol_l. The canonical pipeline field
+  # nitrate_nitrite_umol_l represents the combined NO3 + NO2 measurement.
+  # If your cruise column contains only NO3 (without NO2), add a note
+  # below to record that NO2 was not measured separately on this cruise.
+  nitrate_nitrite_umol_l: nitrate_nitrite_umol_l
   phosphate_umol_l: phosphate_umol_l
   silicate_umol_l: silicate_umol_l
 
@@ -121,21 +151,34 @@ range_checks_reference:
     min: -90
     max: 90
     severity: fail
+    # R-1: For Ghana shelf work, consider tightening to lat [2, 8] to detect
+    # position transcription errors that place samples outside the study region.
+    # See regional.yaml spatial_domain for the study area definition.
 
   longitude:
     canonical_key: longitude_deg
     min: -180
     max: 180
     severity: fail
+    # R-1: For Ghana shelf work, consider tightening to lon [-5, 3].
 
   temperature_degC:
     canonical_key: temperature_insitu_c
-    min: 0
+    # S-1 NOTE: Ghana shelf upwelling water is typically 17-25 C at the
+    # surface and 17-18 C at 40-80 m depth during peak season (June-September).
+    # A lower bound of 0 C will not flag any realistic Ghana shelf measurement,
+    # but also will not catch severe instrument offsets. Tighten to 15 C after
+    # reviewing cruise data to catch implausible cold values without flagging
+    # any real upwelling observations.
+    min: 0        # Acceptable first pass. Consider tightening to 15 after data review.
     max: 35
     severity: review
     notes: >
-      Broad sanity range for tropical coastal and shelf waters. Tighten only
-      after reviewing Ghana shelf observations and instrument records.
+      Broad sanity range for tropical coastal and shelf waters. Ghana shelf
+      upwelling temperatures typically 17-25 C. Values below 15 C are unusual
+      on the Ghana shelf and should be reviewed carefully. Tighten min to 15
+      after initial data review (Hardman-Mountford & McGlade 2003;
+      Mensah et al. 2016).
 
   salinity_psu:
     canonical_key: salinity
@@ -145,6 +188,8 @@ range_checks_reference:
     notes: >
       Allows freshwater influenced, estuarine, coastal, shelf, and moderately
       hypersaline edge cases while still catching extreme values such as 50.
+      See regional.yaml hydrographic_context.salinity_regimes for named
+      salinity regime boundaries.
 
   pressure_dbar:
     canonical_key: pressure_output_dbar
@@ -152,11 +197,22 @@ range_checks_reference:
     max: 6000
     severity: review
 
+  # C-4 FIX: Reduced depth_max from 6000 to 500 m for Ghana shelf work.
+  # The Ghana continental shelf extends to approximately 200 m depth before
+  # the shelf break. Values above 500 m almost certainly represent stations
+  # on the continental slope or deep basin and should be reviewed to confirm
+  # they are intentional. Increase to 6000 if the cruise explicitly includes
+  # deep-water stations.
   depth_m:
     canonical_key: depth_m
     min: 0
-    max: 6000
+    max: 500      # Ghana shelf only. Set to 6000 for basin/slope transects.
     severity: review
+    notes: >
+      Ghana continental shelf break is approximately 200 m. Values above 500 m
+      indicate slope or deep-water stations; confirm these are intentional.
+      Increase to 6000 m if the cruise plan includes deep basin stations
+      (IOC-UNESCO GEBCO).
 
   ta_umol_kg:
     canonical_key: ta_best_umolkg
@@ -164,8 +220,13 @@ range_checks_reference:
     max: 3000
     severity: review
     notes: >
-      Broad screening range only. Estuarine and river influenced samples can
-      differ substantially from open ocean seawater.
+      Broad screening range only. Estuarine and river influenced samples
+      (e.g. Volta River plume) can have TA well below 500 umol/kg and will
+      flag at this lower limit. This is intentional: review flagged low-TA
+      samples in the context of salinity and river proximity, not as data
+      errors. The 200 umol/kg lower bound is intentionally below typical
+      marine TA (~1900-2400 umol/kg) to still capture some extreme river
+      influence while excluding clearly implausible values.
 
   dic_umol_kg:
     canonical_key: dic_best_umol_kg
@@ -175,6 +236,7 @@ range_checks_reference:
     notes: >
       Broad screening range only. Review flagged values in the context of
       salinity, temperature, biological activity, and river influence.
+      Same estuarine caveat applies as for ta_umol_kg above.
 
   ph_total:
     canonical_key: ph_best
@@ -183,7 +245,29 @@ range_checks_reference:
     severity: review
     notes: >
       Assumes pH is reported on the total scale. Do not compare pH values
-      across mixed pH scales without conversion.
+      across mixed pH scales without conversion. Upper bound of 8.7 is
+      appropriate for most Ghana shelf conditions. Highly productive nearshore
+      water during upwelling aftermath can reach 8.8-8.9; review any sample
+      flagged here in the context of chlorophyll and dissolved oxygen
+      (Lefèvre et al. 2008; Bakker et al. 2016 SOCAT).
+
+  # C-3 FIX: Added pCO2 range. Previously absent from reference and template.
+  # Gulf of Guinea pCO2 ranges from ~150 uatm (productive upwelling) to
+  # ~1000-2000 uatm (river outgassing zones). An upper bound of 4000 uatm
+  # screens obvious errors while allowing for elevated coastal values.
+  # Reference: Lefèvre et al. (2008) Deep-Sea Research II 55:2117-2123.
+  pco2_uatm:
+    canonical_key: pco2_best_uatm
+    min: 50
+    max: 4000
+    severity: review
+    notes: >
+      Gulf of Guinea surface pCO2 typically 150-2000 uatm. Values above 4000
+      uatm are physically possible in river outgassing zones but should be
+      reviewed carefully for data entry errors. Values below 50 uatm are
+      biologically implausible for seawater and almost certainly represent
+      measurement or transcription errors. Reference: Lefèvre et al. (2008)
+      Deep-Sea Research II 55:2117-2123; Bakker et al. (2016) SOCAT v4.
 
   phosphate_umol_l:
     canonical_key: phosphate_umol_l
@@ -203,6 +287,33 @@ range_checks_reference:
     max: 100
     severity: review
 
+  # S-3 FIX: Added saturation state reference ranges (previously absent).
+  # Aragonite saturation is critical for Ghana shelf upwelling monitoring.
+  # Surface Omega_Ar on the Ghana shelf is typically 2.5-4.5.
+  # Values near or below 1.0 indicate undersaturation and should be
+  # highlighted for scientific review.
+  omega_aragonite:
+    canonical_key: omega_aragonite_calc
+    min: 0.0
+    max: 5.0
+    severity: review
+    notes: >
+      Ghana shelf surface Omega_Ar typically 2.5-4.5. Values above 5 may
+      indicate data entry or calculation errors. Values below 1.5 indicate
+      near-undersaturation and should be reviewed in the context of upwelling
+      season, subsurface sampling, and river influence. Aragonite reaches
+      undersaturation before calcite (Orr et al. 2005 Nature 437:681).
+
+  omega_calcite:
+    canonical_key: omega_calcite_calc
+    min: 0.0
+    max: 7.0
+    severity: review
+    notes: >
+      Ghana shelf surface Omega_Ca typically 4-7. Calcite saturation state is
+      higher than aragonite by approximately 1.5 Omega units. Values above 7
+      should be reviewed (Feely et al. 2004 Science 305:362).
+
 # ---------------------------------------------------------------------
 # Operational stage config templates
 # ---------------------------------------------------------------------
@@ -221,6 +332,8 @@ range_checks_reference:
 
 operational_stage_config_templates:
   stage3_template:
+    # X-2 FIX: Keep this list in sync with regional.yaml
+    # carbonate_system.pH_policy.accepted_scales.
     accepted_ph_scales:
       - total
 
@@ -245,22 +358,52 @@ operational_stage_config_templates:
       - ph_best
 
     range_policy:
+      # Position limits. These are GLOBAL limits (fail-level checks in pipeline).
+      # R-1: For regional enforcement, tighten to:
+      #   lat_min: 2.0, lat_max: 8.0, lon_min: -5.0, lon_max: 3.0
+      # to match the Ghana shelf spatial domain from regional.yaml.
       lat_min: -90
       lat_max: 90
       lon_min: -180
       lon_max: 180
+
+      # C-4 FIX: Reduced from 6000 to 500 m for Ghana shelf work.
+      # Increase to 6000 if cruise includes deep basin stations.
       depth_min_m: 0
-      depth_max_m: 6000
+      depth_max_m: 500
+
       sal_min: 0
       sal_max: 42
+
+      # S-1 NOTE: Consider tightening temp_min_c to 15 after data review.
+      # Ghana shelf upwelling minima are ~17-22 C.
       temp_min_c: 0
       temp_max_c: 35
+
+      # C-2 NOTE: ta_min and dic_min are set to 200 umol/kg intentionally.
+      # Legitimate estuarine and river-influenced samples (e.g. Volta River
+      # plume) may fall below this limit. Flagged values should be reviewed
+      # in the context of salinity, not automatically discarded.
       ta_min_umolkg: 200
       ta_max_umolkg: 3000
       dic_min_umolkg: 200
       dic_max_umolkg: 3000
+
       ph_min: 6.5
       ph_max: 8.7
+
+      # C-3 FIX: Added pCO2 range. Previously absent from this template.
+      pco2_min_uatm: 50
+      pco2_max_uatm: 4000
+
+      # C-1 / S-3 FIX: Added omega saturation state limits.
+      # Required by pipeline Fix 3-B (separate aragonite/calcite fields).
+      # Without these keys, policy_from_config() falls back to STAGE4_RANGE_DEFAULTS:
+      # omega_ar_max=20, omega_ca_max=20 -- too broad for Ghana shelf monitoring.
+      omega_ar_min: 0.0
+      omega_ar_max: 5.0    # Ghana shelf surface Omega_Ar typically 2.5-4.5
+      omega_ca_min: 0.0
+      omega_ca_max: 7.0    # Calcite saturation ~1.5 Omega units above aragonite
 
     dic_species_audit:
       enabled: true
@@ -271,8 +414,6 @@ operational_stage_config_templates:
 # ---------------------------------------------------------------------
 # Missing value and duplicate policy reference
 # ---------------------------------------------------------------------
-# Stage 4 currently implements missing_key and missing_required_analysis
-# verdict logic. This section documents the intended policy in human terms.
 
 missing_value_policy:
   required_column_missing: fail
@@ -317,11 +458,15 @@ qc_flags:
 # can be added later if needed.
 
 carbonate_pair_policy:
+  # C-7 FIX: Standardised pH scale labels to lowercase (consistent with
+  # pipeline normalize_ph_scale output). "pH_total + DIC" has been replaced
+  # with "ph_total_scale + DIC" to avoid confusion with the field name
+  # ph_total and to match the pipeline's lowercase normalisation convention.
   accepted_input_pairs:
     - TA + pH_observed
     - TA + pH_best
-    - pH_total + DIC
     - TA + DIC
+    - ph_total_scale + DIC
 
   preferred_input_pair: TA + pH_observed
 
@@ -331,4 +476,8 @@ carbonate_pair_policy:
 
   notes: >
     Preferred pair may vary by sample type and data quality. Record the exact
-    carbonate input pair used for every calculated carbonate output.
+    carbonate input pair used for every calculated carbonate output. The
+    pipeline carbon_input_pair_used field is currently free-text; validation
+    against this accepted list is not yet enforced automatically. Ensure that
+    values entered in cruise spreadsheets match one of the accepted_input_pairs
+    strings exactly (case sensitive).
