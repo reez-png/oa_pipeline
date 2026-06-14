@@ -806,22 +806,27 @@ def write_rm_ta_diff_qc_plot(
     sop: TaSop,
     annotate_points: bool = True,
     title: str = "RM Alkalinity Difference",
-) -> None:
-    """Write a JPEG scatter of analysis number against certified minus measured TA."""
+) -> bool:
+    """Write a JPEG scatter of analysis number against certified minus measured TA.
+
+    Returns True if a plot was written, False if skipped (no plottable data).
+    """
     try:
         import matplotlib.pyplot as plt
     except Exception as e:  # pragma: no cover
         die(f"matplotlib is required for plotting. Details: {e}")
 
     if crm_qc.empty:
-        die("No RM or CRM TA rows detected for plotting.")
+        print("INFO: no CRM/RM TA rows to plot; skipping TA plot.")
+        return False
 
     dfp = crm_qc.copy()
     dfp["ta_diff_umolkg"] = pd.to_numeric(dfp["ta_diff_umolkg"], errors="coerce")
     dfp = dfp[dfp["ta_diff_umolkg"].notna()].copy()
 
     if dfp.empty:
-        die("No numeric TA differences to plot.")
+        print("INFO: no numeric TA differences to plot; skipping TA plot.")
+        return False
 
     dfp["analysis_number"] = range(1, len(dfp) + 1)
 
@@ -881,6 +886,7 @@ def write_rm_ta_diff_qc_plot(
     out_jpeg.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_jpeg, format="jpeg", dpi=240, bbox_inches="tight")
     plt.close(fig)
+    return True
 
 
 def write_ta_markdown_report(
@@ -1367,22 +1373,33 @@ def write_phstd_qc_plot(
     annotate_points: bool,
     title: str,
     summary: Dict[str, Any],
-) -> None:
-    """Write a JPEG scatter of analysis number against expected minus measured pH."""
+) -> bool:
+    """Write a JPEG scatter of analysis number against expected minus measured pH.
+
+    Returns True if a plot was written, False if skipped (no plottable data).
+    """
     try:
         import matplotlib.pyplot as plt
     except Exception as e:  # pragma: no cover
         die(f"matplotlib is required for plotting. Details: {e}")
 
     if phstd_qc.empty:
-        die("No pH standard rows detected for plotting.")
+        # No standard rows to plot is a normal QC outcome (e.g. standards
+        # were logged but carry no measured pH/temperature). Skip the plot
+        # and signal that nothing was written rather than aborting the run.
+        print("INFO: no pH standard rows to plot; skipping pH-standard plot.")
+        return False
 
     dfp = phstd_qc.copy()
     dfp[diff_col] = pd.to_numeric(dfp[diff_col], errors="coerce")
     dfp = dfp[dfp[diff_col].notna()].copy()
 
     if dfp.empty:
-        die("No numeric pH differences to plot.")
+        print(
+            "INFO: no numeric pH differences to plot "
+            "(standards present but missing pH/temp); skipping plot."
+        )
+        return False
 
     dfp["analysis_number"] = range(1, len(dfp) + 1)
     outlier_mask = _bool_col(dfp, outlier_col)
@@ -1450,6 +1467,7 @@ def write_phstd_qc_plot(
     out_jpeg.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_jpeg, format="jpeg", dpi=240, bbox_inches="tight")
     plt.close(fig)
+    return True
 
 
 def write_phstd_markdown_report(

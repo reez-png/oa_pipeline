@@ -46,12 +46,109 @@ def test_build_command_minimal() -> None:
         dry_run=False,
     )
     assert cmd[:2] == ["bash", "./run_pipeline.sh"]
-    # Compare using str(Path(...)) so the separator matches the host OS
-    # (forward slash on POSIX, backslash on Windows). build_command passes the
-    # path straight through, which is what run_pipeline.sh expects on each OS.
-    assert str(Path("/proj/in.xlsx")) in cmd
-    assert str(Path("/proj/out")) in cmd
+    # build_command now converts paths to a POSIX mount form bash will not
+    # mangle (see to_bash_path). A path with no Windows drive letter is
+    # already POSIX, so it passes through with forward slashes on every host
+    # OS — that's what we assert, rather than str(Path(...)) which would be
+    # backslash-separated on Windows and never reach bash intact.
+    assert "/proj/in.xlsx" in cmd
+    assert "/proj/out" in cmd
     assert cmd[-2:] == ["--sheet", "0"]
+
+
+def test_build_command_converts_windows_path_to_forward_slashes() -> None:
+    """A Windows drive path must reach bash with forward slashes only.
+
+    This is the regression that caused the launcher's
+    'file not found: C:UsersOA_2023-03...' error: backslashes were stripped
+    by bash during tokenization. Using forward slashes (keeping the drive
+    letter) prevents that AND stays parseable by the Windows Python that
+    papermill invokes downstream.
+    """
+    cmd = core.build_command(
+        "C:/Program Files/Git/bin/bash.exe",
+        Path("/proj"),
+        Path(r"C:\Users\OA_2023-03\data\in.xlsx"),
+        Path(r"C:\Users\OA_2023-03\out"),
+        "0",
+        no_parquet=False,
+        include_viewer=False,
+        include_review=False,
+        dry_run=False,
+    )
+    # The path arguments (after the script name) carry no backslashes; cmd[0]
+    # is the bash executable path, which we do not convert.
+    assert all("\\" not in arg for arg in cmd[2:])
+    assert "C:/Users/OA_2023-03/data/in.xlsx" in cmd
+    assert "C:/Users/OA_2023-03/out" in cmd
+
+
+def test_build_command_forward_slash_form_is_bash_flavor_independent() -> None:
+    """The conversion is identical regardless of which bash is used."""
+    args = (
+        Path("/proj"),
+        Path(r"C:\Users\OA_2023-03\data\in.xlsx"),
+        Path(r"C:\Users\OA_2023-03\out"),
+        "0",
+    )
+    kw = dict(
+        no_parquet=False,
+        include_viewer=False,
+        include_review=False,
+        dry_run=False,
+    )
+    git = core.build_command("C:/Program Files/Git/bin/bash.exe", *args, **kw)
+    wsl = core.build_command(r"C:\WINDOWS\system32\bash.EXE", *args, **kw)
+    assert git[2:] == wsl[2:]
+    assert "C:/Users/OA_2023-03/data/in.xlsx" in git
+
+
+def test_build_command_config_dir_omitted_by_default() -> None:
+    cmd = core.build_command(
+        "bash",
+        Path("/proj"),
+        Path("/proj/in.xlsx"),
+        Path("/proj/out"),
+        "0",
+        no_parquet=False,
+        include_viewer=False,
+        include_review=False,
+        dry_run=False,
+    )
+    assert "--config-dir" not in cmd
+
+
+def test_build_command_config_dir_included_when_given() -> None:
+    cmd = core.build_command(
+        "bash",
+        Path("/proj"),
+        Path("/proj/in.xlsx"),
+        Path("/proj/out"),
+        "0",
+        no_parquet=False,
+        include_viewer=False,
+        include_review=False,
+        dry_run=False,
+        config_dir=Path("/proj/configs"),
+    )
+    assert "--config-dir" in cmd
+    assert cmd[cmd.index("--config-dir") + 1] == "/proj/configs"
+
+
+def test_build_command_config_dir_windows_path_forward_slashed() -> None:
+    cmd = core.build_command(
+        "C:/Program Files/Git/bin/bash.exe",
+        Path("/proj"),
+        Path(r"C:\Users\x\in.xlsx"),
+        Path(r"C:\Users\x\out"),
+        "0",
+        no_parquet=False,
+        include_viewer=False,
+        include_review=False,
+        dry_run=False,
+        config_dir=Path(r"C:\Users\x\configs"),
+    )
+    assert cmd[cmd.index("--config-dir") + 1] == "C:/Users/x/configs"
 
 
 def test_build_command_all_flags() -> None:
@@ -69,6 +166,22 @@ def test_build_command_all_flags() -> None:
     for flag in ("--no-parquet", "--include-viewer", "--include-review", "--dry-run"):
         assert flag in cmd
     assert "2" in cmd
+
+
+def test_to_bash_path_posix_unchanged() -> None:
+    assert core.to_bash_path(Path("/proj/in.xlsx")) == "/proj/in.xlsx"
+
+
+def test_to_bash_path_windows_forward_slash() -> None:
+    # Drive letter kept, separators flipped to forward slashes — parseable
+    # by both bash and Windows Python.
+    out = core.to_bash_path(Path(r"C:\Users\x\in.xlsx"))
+    assert out == "C:/Users/x/in.xlsx"
+
+
+def test_to_bash_path_no_backslashes_remain() -> None:
+    out = core.to_bash_path(Path(r"C:\Users\x\sub dir\in.xlsx"))
+    assert "\\" not in out
 
 
 def test_environment_problems_no_root() -> None:

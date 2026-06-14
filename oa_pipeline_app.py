@@ -88,6 +88,8 @@ class PipelineApp:
 
         self.xlsx_var = tk.StringVar()
         self.out_var = tk.StringVar()
+        self.config_dir_var = tk.StringVar()
+        self.use_config_var = tk.BooleanVar(value=False)
         self.sheet_var = tk.StringVar(value="0")
         self.no_parquet_var = tk.BooleanVar(value=False)
         self.viewer_var = tk.BooleanVar(value=False)
@@ -139,9 +141,25 @@ class PipelineApp:
             row=3, column=2, **pad
         )
 
+        # Config folder row (optional per-stage YAML/JSON overrides)
+        ttk.Checkbutton(
+            frm,
+            text="Use config folder:",
+            variable=self.use_config_var,
+            command=self._toggle_config_row,
+        ).grid(row=4, column=0, sticky="w", **pad)
+        self.config_entry = ttk.Entry(
+            frm, textvariable=self.config_dir_var, width=58, state="disabled"
+        )
+        self.config_entry.grid(row=4, column=1, sticky="we", **pad)
+        self.config_btn = ttk.Button(
+            frm, text="Browse…", command=self._pick_config, state="disabled"
+        )
+        self.config_btn.grid(row=4, column=2, **pad)
+
         # Options
         opts = ttk.LabelFrame(frm, text="Options", padding=8)
-        opts.grid(row=4, column=0, columnspan=3, sticky="we", **pad)
+        opts.grid(row=5, column=0, columnspan=3, sticky="we", **pad)
         ttk.Label(opts, text="Sheet index:").grid(row=0, column=0, sticky="w")
         ttk.Entry(opts, textvariable=self.sheet_var, width=6).grid(
             row=0, column=1, sticky="w", padx=(4, 16)
@@ -163,7 +181,7 @@ class PipelineApp:
 
         # Buttons
         btns = ttk.Frame(frm)
-        btns.grid(row=5, column=0, columnspan=3, sticky="we", pady=(4, 4))
+        btns.grid(row=6, column=0, columnspan=3, sticky="we", pady=(4, 4))
         self.run_btn = ttk.Button(btns, text="Run pipeline", command=self._run)
         self.run_btn.pack(side="left", padx=4)
         self.cancel_btn = ttk.Button(
@@ -179,15 +197,15 @@ class PipelineApp:
 
         # Progress + status
         self.progress = ttk.Progressbar(frm, mode="indeterminate")
-        self.progress.grid(row=6, column=0, columnspan=3, sticky="we", **pad)
+        self.progress.grid(row=7, column=0, columnspan=3, sticky="we", **pad)
         self.status_var = tk.StringVar(value="Ready.")
         ttk.Label(frm, textvariable=self.status_var, foreground="#1F4E79").grid(
-            row=7, column=0, columnspan=3, sticky="w", padx=8
+            row=8, column=0, columnspan=3, sticky="w", padx=8
         )
 
         # Log
         logfrm = ttk.LabelFrame(frm, text="Progress log", padding=4)
-        logfrm.grid(row=8, column=0, columnspan=3, sticky="nsew", **pad)
+        logfrm.grid(row=9, column=0, columnspan=3, sticky="nsew", **pad)
         self.log = tk.Text(logfrm, height=14, wrap="word", state="disabled")
         self.log.pack(side="left", fill="both", expand=True)
         sb = ttk.Scrollbar(logfrm, command=self.log.yview)
@@ -195,7 +213,7 @@ class PipelineApp:
         self.log.configure(yscrollcommand=sb.set)
 
         frm.columnconfigure(1, weight=1)
-        frm.rowconfigure(8, weight=1)
+        frm.rowconfigure(9, weight=1)
 
     # -- helpers -------------------------------------------------------------
 
@@ -245,6 +263,24 @@ class PipelineApp:
         if path:
             self.out_var.set(path)
 
+    def _pick_config(self) -> None:
+        path = filedialog.askdirectory(
+            title="Choose a config folder (per-stage YAML/JSON)"
+        )
+        if path:
+            self.config_dir_var.set(path)
+
+    def _toggle_config_row(self) -> None:
+        state = "normal" if self.use_config_var.get() else "disabled"
+        self.config_entry.configure(state=state)
+        self.config_btn.configure(state=state)
+        if self.use_config_var.get() and not self.config_dir_var.get():
+            # Default to the project's configs/ folder if it exists.
+            if self.project_root:
+                default = self.project_root / "configs"
+                if default.is_dir():
+                    self.config_dir_var.set(str(default))
+
     def _open_output(self) -> None:
         out = Path(self.out_var.get()).expanduser()
         out.mkdir(parents=True, exist_ok=True)
@@ -274,6 +310,17 @@ class PipelineApp:
         out_dir = Path(self.out_var.get()).expanduser()
         out_dir.mkdir(parents=True, exist_ok=True)
 
+        config_dir: Path | None = None
+        if self.use_config_var.get():
+            cd_text = self.config_dir_var.get().strip()
+            if cd_text:
+                config_dir = Path(cd_text).expanduser()
+                if not config_dir.is_dir():
+                    messagebox.showerror(
+                        APP_TITLE, f"Config folder not found:\n{config_dir}"
+                    )
+                    return
+
         cmd = build_command(
             self.bash_exe,
             self.project_root,
@@ -284,6 +331,7 @@ class PipelineApp:
             self.viewer_var.get(),
             self.review_var.get(),
             self.dry_run_var.get(),
+            config_dir=config_dir,
         )
 
         self.run_btn.configure(state="disabled")

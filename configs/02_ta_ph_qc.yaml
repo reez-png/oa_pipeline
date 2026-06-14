@@ -1,0 +1,45 @@
+# configs/02_ta_ph_qc.yaml
+# ---------------------------------------------------------------------------
+# Per-stage overrides for Notebook 02 (TA + pH QC), applied by run_pipeline.sh
+# via --config-dir and consumed in the notebook's config cell under the
+# `parameters:` key. Only keys that already exist as notebook globals are
+# applied; unknown keys are ignored with a warning.
+#
+# Workbook: oa_data_apr.xlsx
+#   * pH measured column is `ph_observed` (not the old `pH_lab`).
+#   * Contains BOTH QC reference groups:
+#       - tris buffer standards : sample_type=std, sample_tag=tris_1..tris_8  (n=8)
+#       - TA CRM (Dickson b.213) : sample_type=crm, sample_tag=RM213_1..RM213_7 (n=7)
+#   * The sample/std/crm indicator is in column `sample_type`, NOT the
+#     notebook default `crm_or_sample`.
+#
+# Why each override:
+#   PH_COL            - real measured pH column in this workbook.
+#   CRM_OR_SAMPLE_COL - remap to `sample_type`. For pH QC this makes the CRM
+#                       rows be excluded from the "sample" set instead of
+#                       miscounted as pH samples (samples are now flag=="sample"
+#                       rather than "anything that isn't a tris standard").
+#   ALLOW_CRM_FLAG_COL- let TA CRM detection also honor sample_type=="crm" in
+#                       addition to the RM tag prefix (OR logic; purely
+#                       additive, cannot drop the 7 already detected by tag).
+#   PHSTD_QC          - ON. tris standards are present and should be QC'd.
+# ---------------------------------------------------------------------------
+parameters:
+  # --- pH measured column present in this workbook ---
+  PH_COL: ph_observed
+  PH_TEMP_COL: temp_lab
+
+  # --- Type indicator column (values: sample / std / crm) ---
+  CRM_OR_SAMPLE_COL: sample_type
+  ALLOW_CRM_FLAG_COL: true
+
+  # --- pH-standard (tris buffer) QC: ON ---
+  # Defaults already match (PH_BUFFER=tris, PHSTD_TAG_PREFIX=tris, MIN_PHSTD_N=2);
+  # restated for self-documentation. 8 tris rows >> MIN_PHSTD_N.
+  PHSTD_QC: true
+  PH_BUFFER: tris
+  PHSTD_TAG_PREFIX: tris
+
+  # Flag/QC the tris standards but do NOT rewrite sample ph_observed by the
+  # standard offset. Set true only if you want measured sample pH corrected.
+  PHSTD_CORRECT_SAMPLES: false

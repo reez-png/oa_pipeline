@@ -275,6 +275,15 @@ STAGE3_DEFAULTS: Dict[str, Any] = {
         "ph_diag_tol": 0.10,
         "dic_mad_k": 3.5,
         "ph_mad_k": 3.5,
+        # pH diagnostic temperature harmonization (opt-in). When True, the
+        # measured-vs-calculated pH comparison corrects for the difference
+        # between the temperature at which each pH is reported before
+        # flagging, so a pure temperature offset is not mistaken for a
+        # consistency failure. Uses a LINEAR approximation of the seawater pH
+        # temperature sensitivity (dpH/dT ~ -0.0165 /degC); this is adequate
+        # for a QC screen but is NOT used to produce any reported pH value.
+        "ph_diag_harmonize_temperature": False,
+        "ph_diag_temp_sensitivity": -0.0165,
     },
     # Stage 3 does not run a carbonate solver. Production default is therefore
     # to report missing solver and input pair provenance rather than inventing it.
@@ -302,6 +311,8 @@ class CarbonateIntegrityThresholds:
     ph_diag_tol: float = 0.10
     dic_mad_k: float = 3.5
     ph_mad_k: float = 3.5
+    ph_diag_harmonize_temperature: bool = False
+    ph_diag_temp_sensitivity: float = -0.0165
 
     def __post_init__(self) -> None:
         for name in [
@@ -310,6 +321,7 @@ class CarbonateIntegrityThresholds:
             "ph_diag_tol",
             "dic_mad_k",
             "ph_mad_k",
+            "ph_diag_temp_sensitivity",
         ]:
             value = float(getattr(self, name))
 
@@ -317,6 +329,10 @@ class CarbonateIntegrityThresholds:
                 raise ValueError(f"{name} must be finite, got {value!r}")
 
             setattr(self, name, value)
+
+        self.ph_diag_harmonize_temperature = bool(
+            self.ph_diag_harmonize_temperature
+        )
 
         if self.dic_abs_tol < 0:
             raise ValueError("dic_abs_tol must be non negative.")
@@ -814,6 +830,38 @@ def _ph_block(
     diff = ph_best - ph_calc
     vals_ok = ph_best.notna() & ph_calc.notna()
 
+    # Temperature harmonization of the pH diagnostic (opt-in).
+    # ph_best (from the measured pH) is reported at measurement/lab
+    # temperature; ph_co2sys (the CO2SYS-derived pH) is reported at in situ
+    # temperature. Differencing them directly conflates a temperature
+    # reference difference with a genuine consistency failure. When enabled,
+    # we bring ph_best to the in situ reference using a LINEAR approximation
+    # of the seawater pH temperature sensitivity (dpH/dT) and flag on the
+    # harmonized difference. This is a QC screen only; the adjusted value is
+    # NOT written back as a reported pH. If either temperature is missing for
+    # a row, that row falls back to the raw difference.
+    harmonized = diff
+    temp_meas_col = "temperature_measurement_c"
+    temp_insitu_col = "temperature_insitu_c"
+    harmonize_applied = pd.Series(False, index=df.index, dtype="boolean")
+    if (
+        thr.ph_diag_harmonize_temperature
+        and temp_meas_col in df.columns
+        and temp_insitu_col in df.columns
+    ):
+        t_meas = pd.to_numeric(df[temp_meas_col], errors="coerce")
+        t_insitu = pd.to_numeric(df[temp_insitu_col], errors="coerce")
+        # ph_best adjusted from measurement temperature to in situ temperature.
+        ph_best_at_insitu = ph_best + thr.ph_diag_temp_sensitivity * (
+            t_insitu - t_meas
+        )
+        temps_ok = t_meas.notna() & t_insitu.notna()
+        harmonized = harmonized.where(~temps_ok, ph_best_at_insitu - ph_calc)
+        harmonize_applied = (vals_ok & temps_ok).astype("boolean")
+
+    out["ph_diag_harmonize_temperature_applied"] = harmonize_applied
+    out["ph_best_minus_ph_co2sys_temp_harmonized"] = harmonized.astype("Float64")
+
     scale_obs = (
         df["ph_scale_observed_normalized"]
         if "ph_scale_observed_normalized" in df.columns
@@ -856,14 +904,14 @@ def _ph_block(
     out["ph_diag_check_possible_row"] = vals_ok.astype("boolean")
     out["ph_diag_strict_check_possible_row"] = strict_possible.astype("boolean")
     out["ph_best_minus_ph_co2sys"] = diff.astype("Float64")
-    out["flag_ph_diag_mismatch"] = (vals_ok & (diff.abs() > thr.ph_diag_tol)).astype("boolean")
+    out["flag_ph_diag_mismatch"] = (vals_ok & (harmonized.abs() > thr.ph_diag_tol)).astype("boolean")
     out["flag_ph_diag_mismatch_strict"] = (
-        strict_possible & (diff.abs() > thr.ph_diag_tol)
+        strict_possible & (harmonized.abs() > thr.ph_diag_tol)
     ).astype("boolean")
     out["flag_ph_diag_mismatch_robust"] = (
         vals_ok
         & robust_outlier_flags(
-            diff.where(vals_ok),
+            harmonized.where(vals_ok),
             mad_k=thr.ph_mad_k,
             min_n=5,
         ).fillna(False)

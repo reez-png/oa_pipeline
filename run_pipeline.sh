@@ -210,8 +210,23 @@ fi
 # allows the script to be launched from outside the repository while still
 # accepting relative paths from the caller's current directory.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && { pwd -W 2>/dev/null || pwd; })"
 NOTEBOOK_DIR="$SCRIPT_DIR/notebooks"
+
+# win_pwd: print the current directory in a form that the *Windows* Python
+# interpreter (run via papermill) can parse. Under Git Bash / MSYS2, plain
+# `pwd` returns a mount path like /c/Users/... which Windows pathlib reads
+# as \c\Users\... on the current drive — causing the notebooks to die with
+# "File not found". `pwd -W` returns the Windows form (C:/Users/...) that
+# both bash and Windows Python accept. On macOS/Linux there is no -W flag,
+# so fall back to plain pwd.
+win_pwd() {
+    if pwd -W >/dev/null 2>&1; then
+        pwd -W
+    else
+        pwd
+    fi
+}
 
 abs_file() {
     local path="$1"
@@ -223,7 +238,7 @@ abs_file() {
 
     local dir
     local base
-    dir="$(cd "$(dirname "$path")" && pwd)"
+    dir="$(cd "$(dirname "$path")" && win_pwd)"
     base="$(basename "$path")"
     printf "%s/%s\n" "$dir" "$base"
 }
@@ -236,13 +251,13 @@ abs_existing_dir() {
         exit 2
     fi
 
-    (cd "$path" && pwd)
+    (cd "$path" && win_pwd)
 }
 
 abs_dir_create() {
     local path="$1"
     mkdir -p "$path"
-    (cd "$path" && pwd)
+    (cd "$path" && win_pwd)
 }
 
 INPUT_XLSX="$(abs_file "$INPUT_XLSX")"

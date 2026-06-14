@@ -1,0 +1,32 @@
+# configs/07_stage3.yaml
+# ---------------------------------------------------------------------------
+# Per-stage overrides for Notebook 07 (Stage 3 carbonate integrity checks),
+# applied by run_pipeline.sh via --config-dir and merged onto
+# oa_pipeline.stage3.STAGE3_DEFAULTS.
+#
+# Why: in this dataset the carbonate system was solved from the TA + pH input
+# pair, so the CO2SYS-derived pH (ph_co2sys) is the measured pH (ph_best)
+# re-expressed at in situ temperature, not an independent estimate. The
+# measured pH is reported at laboratory/measurement temperature. Differencing
+# the two directly therefore conflates a temperature reference difference with
+# a genuine consistency failure (verified: the raw difference is fully
+# explained by temperature, r = -1.00, slope ~ -0.0165 pH/degC).
+#
+# Enabling ph_diag_harmonize_temperature brings ph_best to the in situ
+# reference using a linear pH temperature-sensitivity approximation before
+# computing the diagnostic difference, so the check tests genuine agreement
+# rather than the temperature offset. This is a QC screen only; the adjusted
+# value is not written back as a reported pH. With harmonization on, the
+# residual differences for this dataset fall to <= 0.015 pH (mean ~0.008),
+# i.e. measured and calculated pH agree once temperature is accounted for.
+#
+# Note: the raw (unharmonized) difference is still recorded in
+# ph_best_minus_ph_co2sys for transparency; the harmonized difference is in
+# ph_best_minus_ph_co2sys_temp_harmonized, and
+# ph_diag_harmonize_temperature_applied flags which rows used it.
+# ---------------------------------------------------------------------------
+thresholds:
+  ph_diag_harmonize_temperature: true
+  ph_diag_temp_sensitivity: -0.0165
+  # ph_diag_tol left at its default (0.10); harmonization addresses the
+  # offset directly rather than loosening the tolerance.

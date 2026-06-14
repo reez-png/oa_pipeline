@@ -38,18 +38,29 @@ def find_project_root(start: Path) -> Path | None:
 
 
 def find_bash() -> str | None:
-    """Locate bash; on Windows fall back to common Git Bash locations."""
+    """Locate bash, preferring Git Bash over the WSL stub on Windows.
+
+    On Windows, `shutil.which("bash")` usually resolves to
+    C:\\WINDOWS\\system32\\bash.exe — the WSL launcher. That bash mangles
+    Windows backslash paths during command-line tokenization, mounts C: at
+    /mnt/c (not /c), and runs a Linux Python that cannot see a Windows
+    .venv. Git Bash avoids all three problems, so we look for it first and
+    only fall back to PATH bash if Git Bash is absent.
+    """
+    if os.name == "nt":
+        for p in [
+            Path("C:/Program Files/Git/bin/bash.exe"),
+            Path("C:/Program Files/Git/usr/bin/bash.exe"),
+            Path("C:/Program Files (x86)/Git/bin/bash.exe"),
+        ]:
+            if p.exists():
+                return str(p)
     found = shutil.which("bash")
-    if found:
+    if found and "System32" not in found and "system32" not in found:
         return found
-    for p in [
-        Path("C:/Program Files/Git/bin/bash.exe"),
-        Path("C:/Program Files/Git/usr/bin/bash.exe"),
-        Path("C:/Program Files (x86)/Git/bin/bash.exe"),
-    ]:
-        if p.exists():
-            return str(p)
-    return None
+    # Last resort: even the WSL stub is better than nothing; the path
+    # conversion below still lets relative paths work.
+    return found
 
 
 def find_python() -> str:
@@ -85,6 +96,34 @@ def kernel_available(python_exe: str) -> bool:
         return False
 
 
+def to_bash_path(p: Path, bash_exe: str | None = None) -> str:
+    """Normalize a path so BOTH bash and Windows Python accept it.
+
+    The launcher hands a path to bash (`bash run_pipeline.sh PATH ...`),
+    and run_pipeline.sh in turn hands that same string to a *Windows*
+    Python interpreter via papermill (XLSX_PATH, OUT_DIR, ...). Those two
+    consumers have conflicting needs:
+
+      * bash strips backslashes during tokenization, so C:\\Users\\x became
+        C:Usersx — the original launcher error.
+      * Windows Python (the project's .venv) does NOT understand Git Bash
+        mount paths: Path("/c/Users/x") parses as \\c\\Users\\x on the
+        current drive, so a /c/... or /mnt/c/... path makes the notebook
+        die with "File not found".
+
+    A drive-letter path with FORWARD slashes satisfies both:
+        C:\\Users\\x  ->  C:/Users/x
+    bash sees no backslashes (drive letter passes through as a plain
+    argument), and Windows Python resolves "C:/Users/x" correctly. POSIX
+    paths are already forward-slash and pass through unchanged.
+
+    `bash_exe` is accepted for signature stability but no longer affects
+    the result: the forward-slash drive form works for Git Bash and the
+    WSL stub alike, and avoids the mount-prefix mismatch entirely.
+    """
+    return str(p).replace("\\", "/")
+
+
 def build_command(
     bash_exe: str,
     project_root: Path,
@@ -95,16 +134,19 @@ def build_command(
     include_viewer: bool,
     include_review: bool,
     dry_run: bool,
+    config_dir: Path | None = None,
 ) -> list[str]:
     """Assemble the run_pipeline.sh command."""
     cmd = [
         bash_exe,
         "./run_pipeline.sh",
-        str(xlsx),
-        str(out_dir),
+        to_bash_path(xlsx, bash_exe),
+        to_bash_path(out_dir, bash_exe),
         "--sheet",
         str(sheet),
     ]
+    if config_dir is not None:
+        cmd.extend(["--config-dir", to_bash_path(config_dir, bash_exe)])
     if no_parquet:
         cmd.append("--no-parquet")
     if include_viewer:
