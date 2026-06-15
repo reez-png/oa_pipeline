@@ -235,7 +235,10 @@ def make_rewrite_patch(static_df: pd.DataFrame, repo_root: Path, out_dir: Path, 
         txt = fname.read_text(encoding="utf-8", errors="ignore")
         bad = r["match"]
         repl = REPLACEMENTS.get(bad, "viridis")
-        new = re.sub(rf"(['\"])({bad})(['\"])", rf"'\g<2>'".replace(bad, repl), txt)
+        # Replace the banned name with its replacement, preserving the original
+        # surrounding quote characters (group 1 = opening quote, group 2 =
+        # closing quote). re.escape guards names with regex-special chars.
+        new = re.sub(rf"(['\"]){re.escape(bad)}(['\"])", rf"\g<1>{repl}\g<2>", txt)
         if new != txt:
             changes.append((fname, txt, new))
             if not dry_run:

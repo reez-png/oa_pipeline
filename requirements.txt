@@ -23,4 +23,23 @@
 # Archive requirements-lock.txt together with the run outputs.
 # =====================================================================
 
+# Core install: pulls the full dependency set declared in pyproject.toml.
 -e .[all]
+
+# ---------------------------------------------------------------------
+# Visualization extras (oa_plots.py / oa_figures.ipynb / src/viz).
+# These are listed explicitly so a fresh clone can build figures even if
+# the pyproject [all] extra does not already include them. If they are
+# already in pyproject, pip simply treats these as satisfied.
+# ---------------------------------------------------------------------
+matplotlib>=3.6
+seaborn>=0.12
+
+# ---------------------------------------------------------------------
+# Optional, not required to run the pipeline or the core figures.
+# Uncomment to enable:
+#   * cartopy   — coastline/land basemap for the station map cell
+#                 (the notebook falls back to a plain scatter without it)
+#   * colorspacious — color-vision-deficiency previews in src/viz/cmap_audit
+# cartopy>=0.22
+# colorspacious>=1.1

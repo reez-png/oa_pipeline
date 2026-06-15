@@ -1,0 +1,40 @@
+# =====================================================================
+# .gitattributes — keep line endings sane across Windows / macOS / Linux
+# =====================================================================
+# Without this, git on Windows may rewrite checked-out files to CRLF.
+# That breaks shell scripts run under Git Bash (the `#!/usr/bin/env bash`
+# shebang and `\r` line endings cause "bad interpreter" / syntax errors),
+# so run_pipeline.sh and any other *.sh are pinned to LF explicitly.
+
+# Default: let git decide text vs binary, normalize to LF in the repo.
+* text=auto
+
+# Shell scripts MUST stay LF on every platform (they run under Git Bash).
+*.sh text eol=lf
+
+# Other Unix-y text that should stay LF.
+*.yaml text eol=lf
+*.yml text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# Python / docs: normalized text (LF in repo; git handles working copy).
+*.py text
+*.md text
+*.txt text
+*.cfg text
+*.toml text
+*.ipynb text
+
+# Binary / data formats: never touch (no EOL conversion, no diff noise).
+*.xlsx binary
+*.xls binary
+*.xlsm binary
+*.parquet binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.nc binary
+*.npz binary
+*.npy binary
