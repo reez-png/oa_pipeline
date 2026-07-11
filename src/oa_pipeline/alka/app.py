@@ -20,8 +20,10 @@ from tkinter import ttk, scrolledtext
 
 from .state import AppState
 from . import runner
+from . import results as results_reader
 from .panels.input_panel import InputPanel
 from .panels.options_panel import OptionsPanel
+from .panels.results_panel import ResultsPanel
 
 
 APP_TITLE = "Alka — OA carbonate pipeline"
@@ -56,13 +58,18 @@ class AlkaApp:
         self.cancel_btn.pack(side="left", padx=4)
         ttk.Button(btns, text="Quit", command=root.destroy).pack(side="right", padx=4)
 
-        # --- log ---
+        # --- progress + results + log ---
         self.progress = ttk.Progressbar(frm, mode="indeterminate")
         self.progress.grid(row=3, column=0, sticky="we", pady=(0, 4))
-        self.log = scrolledtext.ScrolledText(frm, height=18, width=90, state="disabled")
-        self.log.grid(row=4, column=0, sticky="nsew")
+
+        self.results_panel = ResultsPanel(frm)
+        self.results_panel.grid(row=4, column=0, sticky="we", pady=(0, 6))
+        # (hidden until a run finishes)
+
+        self.log = scrolledtext.ScrolledText(frm, height=16, width=90, state="disabled")
+        self.log.grid(row=5, column=0, sticky="nsew")
         frm.columnconfigure(0, weight=1)
-        frm.rowconfigure(4, weight=1)
+        frm.rowconfigure(5, weight=1)
 
         # --- resolve environment and report ---
         problems = runner.resolve_environment(self.state)
@@ -107,6 +114,13 @@ class AlkaApp:
                     self._log("=== Pipeline finished OK ===")
                     if summary:
                         self._log(summary)
+                    # populate the structured results panel (unless dry-run)
+                    if not self.state.dry_run and self.state.output_dir:
+                        try:
+                            vs = results_reader.read_verdicts(self.state.output_dir)
+                            self.results_panel.show(vs)
+                        except Exception as exc:  # noqa: BLE001
+                            self._log(f"(results panel: {exc})")
                 else:
                     self._log(f"=== Pipeline exited with code {rc} ===")
             self.root.after(0, done)
