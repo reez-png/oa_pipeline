@@ -1,31 +1,11 @@
 # configs/08_stage4.yaml
-# ---------------------------------------------------------------------------
-# Per-stage overrides for Notebook 08 (Stage 4), merged onto
-# oa_pipeline.stage4.STAGE4_DEFAULTS via run_pipeline.sh --config-dir.
-#
-# This enables the INTERNAL carbonate-system calculation: the pipeline computes
-# DIC / Omega_ar / Omega_ca / pCO2 with PyCO2SYS from the RM-corrected total
-# alkalinity (ta_corrected_umolkg) and measured pH, at the lab-temperature
-# input / in-situ-temperature output convention. This replaces reliance on
-# externally computed (Excel) chemistry that was based on RAW TA, so the
-# reported carbonate parameters are consistent with the corrected TA.
-#
-# It is OFF by default (so bare/example runs and the E2E test fixtures are never
-# disturbed); enabling it here is a deliberate, per-dataset choice. Settings are
-# pinned and validated against the lab CO2SYS-Excel output — see
-# carbonate_calc_design.md for the full reasoning:
-#   opt_k_carbonic  = 10  -> Lueker, Dickson & Keeling (2000)
-#   opt_k_bisulfate =  1  -> Dickson (1990)
-#   opt_total_borate=  2  -> Lee et al. (2010)
-#   opt_k_fluoride  =  2  -> Perez & Fraga (1987)
-#   opt_pH_scale    =  1  -> Total scale
-# ---------------------------------------------------------------------------
+# Written by Alka (do not hand-edit unless you know why).
+# Enables the internal PyCO2SYS carbonate calculation in Stage 4:
+# DIC / Omega / pCO2 computed from RM-corrected TA + measured pH, at the
+# lab-temperature input / in-situ-temperature output convention.
+# Settings are pinned/validated (Lueker 2000; Dickson KSO4; Lee 2010
+# borate; Perez & Fraga KF; total pH scale). See carbonate_calc_design.md.
 carbonate_calc:
   enabled: true
-  # require_corrected_ta: only compute where ta_corrected_umolkg is present
-  # (the point of the stage is to use RM-corrected TA). Leave true.
   require_corrected_ta: true
-  # rm_reject_fraction_warn: raise a batch-quality warning if more than this
-  # fraction of a batch's reference materials exceed the +/-20 umol/kg SOP
-  # limit (cookbook: "re-evaluate methods"). 0.34 -> warns at 3 of 7.
   rm_reject_fraction_warn: 0.34
