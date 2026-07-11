@@ -22,6 +22,8 @@ from .state import AppState
 from . import runner
 from . import results as results_reader
 from .open_folder import open_in_file_browser
+from . import figures as figures_launcher
+from .scrollable import ScrollableFrame
 from .panels.input_panel import InputPanel
 from .panels.options_panel import OptionsPanel
 from .panels.results_panel import ResultsPanel
@@ -37,10 +39,21 @@ class AlkaApp:
         self._cancel = threading.Event()
 
         root.title(APP_TITLE)
-        frm = ttk.Frame(root, padding=10)
-        frm.grid(row=0, column=0, sticky="nsew")
         root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
+
+        # The upper content (data, options, buttons, results) can grow tall —
+        # especially the results panel — so it lives in a scrollable area. The
+        # log sits below with its own scroll and a fixed height.
+        outer = ttk.Frame(root, padding=(10, 10, 10, 0))
+        outer.grid(row=0, column=0, sticky="nsew")
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(0, weight=1)
+
+        self._scroll = ScrollableFrame(outer)
+        self._scroll.grid(row=0, column=0, sticky="nsew")
+        frm = self._scroll.body
+        frm.columnconfigure(0, weight=1)
 
         # --- panels ---
         self.input_panel = InputPanel(frm, self.state)
@@ -60,9 +73,12 @@ class AlkaApp:
         self.open_btn = ttk.Button(btns, text="Open output folder",
                                    command=self._open_output, state="disabled")
         self.open_btn.pack(side="left", padx=4)
+        self.figures_btn = ttk.Button(btns, text="Open figures notebook",
+                                      command=self._open_figures, state="disabled")
+        self.figures_btn.pack(side="left", padx=4)
         ttk.Button(btns, text="Quit", command=root.destroy).pack(side="right", padx=4)
 
-        # --- progress + results + log ---
+        # --- progress + results (inside the scroll area) ---
         self.progress = ttk.Progressbar(frm, mode="indeterminate")
         self.progress.grid(row=3, column=0, sticky="we", pady=(0, 4))
 
@@ -70,10 +86,15 @@ class AlkaApp:
         self.results_panel.grid(row=4, column=0, sticky="we", pady=(0, 6))
         # (hidden until a run finishes)
 
-        self.log = scrolledtext.ScrolledText(frm, height=16, width=90, state="disabled")
-        self.log.grid(row=5, column=0, sticky="nsew")
-        frm.columnconfigure(0, weight=1)
-        frm.rowconfigure(5, weight=1)
+        # --- log (outside the scroll area, fixed height, own scrollbar) ---
+        log_frame = ttk.Frame(root, padding=(10, 0, 10, 10))
+        log_frame.grid(row=1, column=0, sticky="nsew")
+        log_frame.columnconfigure(0, weight=1)
+        root.rowconfigure(1, weight=1)
+        self.log = scrolledtext.ScrolledText(log_frame, height=12, width=90,
+                                             state="disabled")
+        self.log.grid(row=0, column=0, sticky="nsew")
+        log_frame.rowconfigure(0, weight=1)
 
         # --- resolve environment and report ---
         problems = runner.resolve_environment(self.state)
@@ -121,6 +142,8 @@ class AlkaApp:
                     # enable "Open output folder" now that there is output
                     if self.state.output_dir:
                         self.open_btn.configure(state="normal")
+                        if not self.state.dry_run:
+                            self.figures_btn.configure(state="normal")
                     # populate the structured results panel (unless dry-run)
                     if not self.state.dry_run and self.state.output_dir:
                         try:
@@ -152,6 +175,18 @@ class AlkaApp:
         ok, msg = open_in_file_browser(self.state.output_dir)
         if not ok:
             self._log(msg)
+
+    def _open_figures(self):
+        if not (self.state.project_root and self.state.output_dir):
+            self._log("Cannot open figures: project root or output not set.")
+            return
+        self._log("Preparing figures notebook…")
+        ok, msg = figures_launcher.open_figures(
+            self.state.project_root, self.state.output_dir)
+        for line in msg.split("\n"):
+            self._log("  " + line)
+        if ok:
+            self._log("  (Jupyter is opening in your browser — run the notebook there.)")
 
 
 def main():
