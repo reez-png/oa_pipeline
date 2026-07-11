@@ -1404,20 +1404,40 @@ def write_phstd_qc_plot(
     dfp["analysis_number"] = range(1, len(dfp) + 1)
     outlier_mask = _bool_col(dfp, outlier_col)
 
-    ok = dfp[~outlier_mask].copy()
-    bad = dfp[outlier_mask].copy()
+    # AUDIT FIX: mark points by whether they EXCEED the drawn acceptance
+    # threshold (|diff| > thr_ok), not only by the MAD statistical flag. The
+    # previous version flagged the statistically most-distant point as the
+    # "outlier" while ignoring the +/- thr_ok lines it draws — so a point that
+    # actually breached the tolerance could be shown as "kept" and a point
+    # comfortably within tolerance shown as the "outlier". This mirrors the TA
+    # plot, which already separates a threshold-exceeds category.
+    diff_abs = dfp[diff_col].abs()
+    exceeds_mask = diff_abs > float(thr_ok)
+
+    exceeds = dfp[exceeds_mask].copy()
+    rest = dfp[~exceeds_mask].copy()
+    rest_outlier_mask = _bool_col(rest, outlier_col)
+    rest_bad = rest[rest_outlier_mask].copy()
+    rest_ok = rest[~rest_outlier_mask].copy()
 
     fig, ax = plt.subplots(figsize=(9.2, 4.9), dpi=170)
 
-    if not ok.empty:
-        ax.scatter(ok["analysis_number"], ok[diff_col], s=58, marker="o", label="Std kept")
-    if not bad.empty:
-        ax.scatter(bad["analysis_number"], bad[diff_col], s=92, marker="x", label="Std outlier")
+    if not rest_ok.empty:
+        ax.scatter(rest_ok["analysis_number"], rest_ok[diff_col], s=58, marker="o",
+                   label="Std kept (within tolerance)")
+    if not rest_bad.empty:
+        ax.scatter(rest_bad["analysis_number"], rest_bad[diff_col], s=92, marker="x",
+                   label="Std statistical outlier")
+    if not exceeds.empty:
+        ax.scatter(exceeds["analysis_number"], exceeds[diff_col], s=120, marker="x",
+                   label=f"Std exceeds tolerance (±{thr_ok:g})")
 
     ax.axhline(0.0, linewidth=1.2)
-    ax.axhline(+thr_ok, linestyle="--", linewidth=1.2)
+    ax.axhline(+thr_ok, linestyle="--", linewidth=1.2,
+               label=f"acceptance ±{thr_ok:g} (GOA-ON/Dickson SOP)")
     ax.axhline(-thr_ok, linestyle="--", linewidth=1.2)
-    ax.axhline(+thr_warn, linestyle=":", linewidth=1.6)
+    ax.axhline(+thr_warn, linestyle=":", linewidth=1.6,
+               label=f"warning ±{thr_warn:g}")
     ax.axhline(-thr_warn, linestyle=":", linewidth=1.6)
 
     ax.set_title(title, fontsize=18, pad=10)
