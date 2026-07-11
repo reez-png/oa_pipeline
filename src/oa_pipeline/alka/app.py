@@ -21,6 +21,7 @@ from tkinter import ttk, scrolledtext
 from .state import AppState
 from . import runner
 from . import results as results_reader
+from .open_folder import open_in_file_browser
 from .panels.input_panel import InputPanel
 from .panels.options_panel import OptionsPanel
 from .panels.results_panel import ResultsPanel
@@ -56,6 +57,9 @@ class AlkaApp:
         self.cancel_btn = ttk.Button(btns, text="Cancel", command=self._cancel_run,
                                      state="disabled")
         self.cancel_btn.pack(side="left", padx=4)
+        self.open_btn = ttk.Button(btns, text="Open output folder",
+                                   command=self._open_output, state="disabled")
+        self.open_btn.pack(side="left", padx=4)
         ttk.Button(btns, text="Quit", command=root.destroy).pack(side="right", padx=4)
 
         # --- progress + results + log ---
@@ -114,11 +118,16 @@ class AlkaApp:
                     self._log("=== Pipeline finished OK ===")
                     if summary:
                         self._log(summary)
+                    # enable "Open output folder" now that there is output
+                    if self.state.output_dir:
+                        self.open_btn.configure(state="normal")
                     # populate the structured results panel (unless dry-run)
                     if not self.state.dry_run and self.state.output_dir:
                         try:
                             vs = results_reader.read_verdicts(self.state.output_dir)
                             self.results_panel.show(vs)
+                            ps = results_reader.read_precision(self.state.output_dir)
+                            self.results_panel.show_precision(ps)
                         except Exception as exc:  # noqa: BLE001
                             self._log(f"(results panel: {exc})")
                 else:
@@ -135,6 +144,14 @@ class AlkaApp:
     def _cancel_run(self):
         self._cancel.set()
         self._log("Cancelling…")
+
+    def _open_output(self):
+        if not self.state.output_dir:
+            self._log("No output folder selected.")
+            return
+        ok, msg = open_in_file_browser(self.state.output_dir)
+        if not ok:
+            self._log(msg)
 
 
 def main():
