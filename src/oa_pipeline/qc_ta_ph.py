@@ -842,22 +842,30 @@ def write_rm_ta_diff_qc_plot(
     fig, ax = plt.subplots(figsize=(9.2, 4.9), dpi=170)
 
     if not rest_ok.empty:
-        ax.scatter(rest_ok["analysis_number"], rest_ok["ta_diff_umolkg"], s=56, marker="o", label="RM kept")
+        ax.scatter(rest_ok["analysis_number"], rest_ok["ta_diff_umolkg"], s=56, marker="o",
+                   label="RM kept (within SOP)")
     if not rest_bad.empty:
-        ax.scatter(rest_bad["analysis_number"], rest_bad["ta_diff_umolkg"], s=72, marker="x", label="RM outlier")
+        ax.scatter(rest_bad["analysis_number"], rest_bad["ta_diff_umolkg"], s=72, marker="x",
+                   label="RM statistical outlier")
     if not exceeds.empty:
-        ax.scatter(exceeds["analysis_number"], exceeds["ta_diff_umolkg"], s=120, marker="x", label="RM exceeds SOP")
+        ax.scatter(exceeds["analysis_number"], exceeds["ta_diff_umolkg"], s=120, marker="x",
+                   label=f"RM exceeds SOP (±{float(sop.reject):g})")
 
     ax.axhline(0.0, linewidth=1.2)
-    ax.axhline(+float(sop.no_adjust), linestyle="--", linewidth=1.2)
+    ax.axhline(+float(sop.no_adjust), linestyle="--", linewidth=1.2,
+               label=f"no-adjust ±{float(sop.no_adjust):g} (GOA-ON/Dickson SOP)")
     ax.axhline(-float(sop.no_adjust), linestyle="--", linewidth=1.2)
-    ax.axhline(+float(sop.reject), linestyle=":", linewidth=1.6)
+    ax.axhline(+float(sop.reject), linestyle=":", linewidth=1.6,
+               label=f"reject ±{float(sop.reject):g}")
     ax.axhline(-float(sop.reject), linestyle=":", linewidth=1.6)
 
     ax.set_title(title, fontsize=16, pad=10)
     ax.set_xlabel("Analysis Number", fontsize=12)
     ax.set_ylabel("RM TA Difference (umol/kg)\n(certified - measured)", fontsize=12)
-    ax.grid(True, linestyle=":", linewidth=1.0)
+    # light horizontal-only grid: aids reading the difference value without
+    # competing with the data or the dotted SOP threshold lines.
+    ax.grid(True, axis="y", linestyle="-", linewidth=0.5, color="0.85", alpha=0.8)
+    ax.set_axisbelow(True)
 
     if annotate_points and sample_tag_col in dfp.columns:
         # AUDIT FIX N-4: iterate with zip over the three needed columns instead
@@ -1443,7 +1451,8 @@ def write_phstd_qc_plot(
     ax.set_title(title, fontsize=18, pad=10)
     ax.set_xlabel("Analysis Number", fontsize=12)
     ax.set_ylabel("pH Difference\n(expected - measured)", fontsize=12)
-    ax.grid(True, linestyle=":", linewidth=1.0)
+    ax.grid(True, axis="y", linestyle="-", linewidth=0.5, color="0.85", alpha=0.8)
+    ax.set_axisbelow(True)
 
     if annotate_points and sample_tag_col in dfp.columns:
         # AUDIT FIX N-4: see the TA plot above — iterate with zip over the
