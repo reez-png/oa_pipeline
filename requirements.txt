@@ -29,3 +29,7 @@
 # calculation of DIC / Omega / pCO2 from RM-corrected TA + pH). Settings are
 # validated against the lab CO2SYS-Excel output; see carbonate_calc_design.md.
 PyCO2SYS>=1.8
+
+# Alka GUI — figures-notebook button launches Jupyter on the run output.
+# jupyterlab is optional for the pipeline itself but needed for that button.
+jupyterlab>=4.0
